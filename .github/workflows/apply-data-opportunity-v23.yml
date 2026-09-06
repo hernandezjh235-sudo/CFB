@@ -1,0 +1,67 @@
+name: Apply CFB Data Opportunity v2.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_data_opportunity_v23.py'
+      - '.github/workflows/apply-data-opportunity-v23.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.3 patch
+        run: python scripts/upgrade_data_opportunity_v23.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Full free-data opportunity validation
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage, canonical_prop_team
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True)
+          pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx)
+          ctx=ensure_branding(ctx,games,players,pday)
+          health=bundle.get('free_health',{})
+          print({'players':len(players),'props':len(props),'tomorrow_props':len(pday),'games':len(games),'logos':logo_coverage(ctx,games),'roster_count':bundle.get('current_roster_count'),'advanced_player_health':bundle.get('advanced_player_health'),'health':health,'errors':bundle.get('errors')})
+          assert len(players)>0
+          assert len(props)>0 and len(pday)>0
+          assert len(games)>0
+          assert logo_coverage(ctx,games)['coverage']>=.90
+          assert health.get('player_box',0)>0 and health.get('team_box',0)>0 and health.get('adv_team',0)>0
+          # At least one of the free current-roster feeds should be available; if not,
+          # current-season player rows still provide roster confirmation and the model
+          # is forced to TRACK prior-only unresolved roles.
+          shown=['Trinidad Chambliss','Demond Williams','CJ Carr','Lincoln Kienholz','Caden Pinnick','Colton Joseph']
+          out={}
+          for n in shown:
+              hit=players[players.player.astype(str).str.lower()==n.lower()] if not players.empty else players
+              if not len(hit): out[n]={'found':False}; continue
+              pr=hit.iloc[0].to_dict(); team=''
+              for g in games:
+                  t=canonical_prop_team({},g,pr)
+                  if t: team=t; break
+              out[n]={'found':True,'history_team':pr.get('team'),'current_team':pr.get('current_team'),'resolved_game_team':team,'source':pr.get('sample_source')}
+          print('PLAYER_OPPORTUNITY_AUDIT',out)
+          PY
+      - name: Commit v2.3 runtime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py free_data_v16.py cfb_runtime_v20.py
+          git commit -m 'Apply CFB v2.3 complete free data and opportunity audit [skip ci]' || exit 0
+          git push
