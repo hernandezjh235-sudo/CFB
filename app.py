@@ -10,10 +10,10 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-from free_data import load_free_stack
-from underdog_cfb import fetch_underdog_cfb_props, props_for_game
+from free_data_v15 import load_free_stack
+from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 
-APP_VERSION = "CFB Prop Engine v1.4 — LIVE UNDERDOG CFB + ELITE PLAYER CARDS"
+APP_VERSION = "CFB Prop Engine v1.5 — WORKING LIVE CFB BOARD"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -529,7 +529,7 @@ def render_player_card(r:dict, ctx:dict, game:dict):
 
 # --------------------------- APP ---------------------------
 now=datetime.now()
-def_week=max(1,min(16,int((now.timetuple().tm_yday-230)/7)+1))
+def_week=max(1,min(16,int((now.timetuple().tm_yday-239)/7)+1))
 year=st.sidebar.number_input("Season",2020,2030,now.year,1)
 week=st.sidebar.number_input("Week",1,20,def_week,1)
 cfbd=CFBD(secret("CFBD_API_KEY")); odds=OddsAPI(secret("ODDS_API_KEY"))
@@ -540,8 +540,8 @@ with st.sidebar:
     st.header("CFB Controls")
     st.write("Free CFB data", "✅ SportsDataverse + NCAA")
     st.write("CFBD paid API", "✅ optional" if cfbd.ready else "⚪ not needed")
-    st.write("Odds paid API", "✅ optional" if odds.ready else "⚪ not needed — enter player lines manually")
-    force=st.button("🔄 Refresh CFB Data",use_container_width=True,type="primary")
+    st.write("Player lines", "✅ Underdog Live (free)" if not odds.ready else "✅ Underdog Live + optional Odds API")
+    force=st.button("🔄 Refresh CFB Data",width="stretch",type="primary")
     st.caption("No paid key is required. SportsDataverse supplies schedules/player/team/advanced/FPI data; NCAA supplies ranking fallback. Paid APIs remain optional only.")
 
 with st.spinner("Loading FREE CFB data…"):
@@ -597,33 +597,33 @@ with TAB_RANK:
         rows.append({"Team":t,"AP":d.get("ap_rank"),"Model Rank":d.get("model_rank"),"SP+":d.get("sp"),"CORE":d.get("core"),"SRS":d.get("srs"),"Elo":d.get("elo"),"Pass D":d.get("def_passing"),"Rush D":d.get("def_rushing"),"Explosive D":d.get("def_expl"),"Havoc":d.get("havoc")})
     if rows:
         rdf=pd.DataFrame(rows).sort_values("Model Rank")
-        st.dataframe(rdf,use_container_width=True,hide_index=True)
-    else: st.info("Power board populates after CFBD data loads.")
+        st.dataframe(rdf,width="stretch",hide_index=True)
+    else: st.info("Power board populates after the free CFB data stack loads.")
 
 with TAB_PLAYERS:
     st.subheader("Player Props")
     st.caption("Opportunity first: expected attempts/carries/receptions are adjusted by game script, pace, opponent unit strength, explosive/havoc matchup and CFB blowout playing-time risk.")
-    game_labels=[f"{g['away']} @ {g['home']}" for g in week_games]
-    selected_label=st.selectbox("Game",game_labels) if game_labels else None
-    selected_game=week_games[game_labels.index(selected_label)] if selected_label in game_labels else None
+    game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in week_games]
+    selected_label=st.selectbox("Game / board",game_labels,index=0)
+    selected_game=None if selected_label=="ALL LIVE CFB PROPS" else week_games[[f"{g['away']} @ {g['home']}" for g in week_games].index(selected_label)]
     live_sources=["Underdog Live"] + (["Live Odds API"] if odds.ready else []) + ["Manual"]
     source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
-    if selected_game and source=="Underdog Live":
+    if source=="Underdog Live":
         c1,c2=st.columns([1,2])
         with c1:
-            ud_refresh=st.button("🔄 Refresh Underdog CFB",type="primary",use_container_width=True)
+            ud_refresh=st.button("🔄 Refresh Underdog CFB",type="primary",width="stretch")
         try:
             if ud_refresh or "ud_cfb_rows" not in st.session_state:
                 ud_rows,ud_debug=fetch_underdog_cfb_props(force=ud_refresh)
                 st.session_state["ud_cfb_rows"]=ud_rows
                 st.session_state["ud_cfb_debug"]=ud_debug
             ud_rows=st.session_state.get("ud_cfb_rows",[])
-            prop_rows=props_for_game(ud_rows,selected_game["away"],selected_game["home"])
+            prop_rows=list(ud_rows) if selected_game is None else props_for_game(ud_rows,selected_game["away"],selected_game["home"])
             # Some Underdog CFB rows carry a school abbreviation while the free
             # schedule uses the full school name. Player lookup below canonicalizes
             # the team; do not discard those live lines just because the names differ.
-            if not prop_rows:
+            if not prop_rows and selected_game is not None:
                 game_players=set()
                 if players is not None and not players.empty and "team" in players.columns:
                     for tm in [selected_game["away"],selected_game["home"]]:
@@ -637,7 +637,8 @@ with TAB_PLAYERS:
                 chosen=st.multiselect("Underdog CFB markets",markets,default=default_markets or markets[:4])
                 prop_rows=[r for r in prop_rows if r.get("prop") in chosen]
             with c2:
-                st.caption(f"Underdog live board: {len(ud_rows)} CFB lines pulled · {len(prop_rows)} matching this game")
+                scope="all live CFB props" if selected_game is None else "matching this game"
+                st.caption(f"Underdog live board: {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}")
             if not prop_rows:
                 st.info("Underdog did not return a matching player line for this selected game yet. Refresh when the CFB board opens/updates.")
                 with st.expander("Underdog feed diagnostics"):
@@ -663,26 +664,37 @@ with TAB_PLAYERS:
         prop_rows=manual_props_df(txt).to_dict("records")
 
     projected=[]
-    if selected_game and prop_rows:
+    if prop_rows:
         for r in prop_rows:
+            row_game=selected_game
+            if row_game is None:
+                ra,rh=norm_name(r.get("away")),norm_name(r.get("home"))
+                for gg in week_games:
+                    if (ra and rh and ((norm_name(gg["away"])==ra and norm_name(gg["home"])==rh) or (ra in norm_name(gg["away"]) and rh in norm_name(gg["home"])))):
+                        row_game=gg; break
+                if row_game is None:
+                    # Build a neutral placeholder game so the live line still appears instead of blanking the board.
+                    away=r.get("away") or "Away"; home=r.get("home") or "Home"
+                    row_game=project_game(away,home,ctx,{},neutral=True)
+                    row_game["weather"]={}
             pr=lookup_player(players,r.get("player",""))
             # Infer team from player bank if bookmaker omitted it.
             team=r.get("team") or pr.get("team")
-            if team not in {selected_game["away"],selected_game["home"]}:
+            if team not in {row_game["away"],row_game["home"]}:
                 # Prefer the model player-bank school when Underdog uses an abbreviation.
                 pr_team=pr.get("team")
-                if pr_team in {selected_game["away"],selected_game["home"]}:
+                if pr_team in {row_game["away"],row_game["home"]}:
                     team=pr_team
                 else:
-                    for t in [selected_game["away"],selected_game["home"]]:
+                    for t in [row_game["away"],row_game["home"]]:
                         if norm_name(team)==norm_name(t) or norm_name(team) in norm_name(t) or norm_name(t) in norm_name(team):
                             team=t; break
-            opp=selected_game["home"] if team==selected_game["away"] else selected_game["away"]
+            opp=row_game["home"] if team==row_game["away"] else row_game["away"]
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
-            proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,selected_game,team or "")
+            proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,row_game,team or "")
             avail,avail_notes=player_availability(r.get("player",""),team or "",injuries_df,depth_df)
             proj*=avail; sd=max(sd*.92, sd*math.sqrt(max(avail,.25))); notes.extend(avail_notes)
-            weather=selected_game.get("weather",{}) or {}; wind=sf(weather.get("wind_mph")); precip=sf(weather.get("precip_prob"))
+            weather=row_game.get("weather",{}) or {}; wind=sf(weather.get("wind_mph")); precip=sf(weather.get("precip_prob"))
             if r.get("prop") in {"Passing Yards","Pass Attempts","Completions","Receiving Yards","Receptions","Pass + Rush Yards"}:
                 wfactor=1.0-clamp(max(wind-15,0)*.006 + max(precip-60,0)*.0015,0,.16)
                 if wfactor<.995: proj*=wfactor; notes.append("weather passing tax")
@@ -693,7 +705,7 @@ with TAB_PLAYERS:
             p=prop_probability(proj,r.get("line"),sd,side)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status="PLAYABLE" if p>=.60 and proj>0 else "LEAN" if p>=.56 and proj>0 else "TRACK"
-            q={**r,"team":team,"opp":opp,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
+            q={**r,"_game":row_game,"team":team,"opp":opp,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
             projected.append(q)
         pdf=pd.DataFrame(projected)
         show=["player","team","prop","side","line","projection","edge","probability","status","notes"]
@@ -701,34 +713,34 @@ with TAB_PLAYERS:
             ranked=sorted(projected,key=lambda x:sf(x.get("probability")),reverse=True)
             cols=st.columns(2)
             for i,rr in enumerate(ranked):
-                with cols[i%2]: render_player_card(rr,ctx,selected_game)
+                with cols[i%2]: render_player_card(rr,ctx,rr.get("_game") or row_game)
             with st.expander("📋 Compact projection table",expanded=False):
                 pdf["probability"]=(pdf["probability"]*100).round(1)
                 for c in ["line","projection","edge"]: pdf[c]=pd.to_numeric(pdf[c],errors="coerce").round(2)
-                st.dataframe(pdf[show].sort_values("probability",ascending=False),use_container_width=True,hide_index=True)
+                st.dataframe(pdf[show].sort_values("probability",ascending=False),width="stretch",hide_index=True)
             if st.button("Save this projected board"):
                 path=DATA_DIR/"saved_prop_board.json"
-                path.write_text(json.dumps(projected,indent=2,default=str)); st.success(f"Saved {len(projected)} props for grading.")
+                path.write_text(json.dumps([{k:v for k,v in x.items() if k!="_game"} for x in projected],indent=2,default=str)); st.success(f"Saved {len(projected)} props for grading.")
         missing=[r.get("player") for r in projected if r.get("projection",0)<=0]
         if missing: st.warning("No usable player-season sample for: "+", ".join(map(str,missing[:12])))
 
 with TAB_DATA:
     st.subheader("Data Readiness")
-    st.success(f"Active source: {data_mode}")
+    st.success(f"Active source: {data_mode} · Games: {len(week_games)} · Players: {len(players) if players is not None else 0}")
     checks=[]
     for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
         v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
             "games":"schedule/results/game counts","teams":"FBS identity/logos/colors/conference","sp":"offense/defense/pass/rush/explosive/havoc/pace","core":"opponent-relative team efficiency","srs":"schedule-adjusted power","elo":"team strength","rankings":"AP/CFP context","talent":"roster talent gap/blowout context","player_stats":"QB/RB/WR season production/usage","advanced":"advanced efficiency context"}[k]})
-    st.dataframe(pd.DataFrame(checks),use_container_width=True,hide_index=True)
+    st.dataframe(pd.DataFrame(checks),width="stretch",hide_index=True)
     st.markdown("**Game-week context adapters**")
     st.dataframe(pd.DataFrame([
         {"Layer":"injuries.csv","Rows":len(injuries_df),"Use":"status + expected snap % workload gate"},
         {"Layer":"depth_chart.csv","Rows":len(depth_df),"Use":"starter/backup role adjustment"},
         {"Layer":"game_context.csv","Rows":len(game_context_df),"Use":"wind/rain/neutral-site weather context"},
-    ]),use_container_width=True,hide_index=True)
+    ]),width="stretch",hide_index=True)
     if bundle.get("free_health"):
         st.markdown("**Free-source rows loaded**")
-        st.dataframe(pd.DataFrame([{"Dataset":k,"Rows":v,"Ready":v>0} for k,v in bundle["free_health"].items()]),use_container_width=True,hide_index=True)
+        st.dataframe(pd.DataFrame([{"Dataset":k,"Rows":v,"Ready":v>0} for k,v in bundle["free_health"].items()]),width="stretch",hide_index=True)
     if bundle.get("errors"):
         st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
@@ -752,13 +764,13 @@ with TAB_GRADE:
                 gdf=pd.DataFrame(graded)
                 wins=(gdf.result=="WIN").sum(); losses=(gdf.result=="LOSS").sum(); pushes=(gdf.result=="PUSH").sum()
                 st.metric("Record",f"{wins}-{losses}"+(f"-{pushes}" if pushes else ""))
-                st.dataframe(gdf[["player","prop","side","line","projection","probability","actual","result"]],use_container_width=True,hide_index=True)
+                st.dataframe(gdf[["player","prop","side","line","projection","probability","actual","result"]],width="stretch",hide_index=True)
                 if st.button("Append to graded history"):
                     old=pd.read_csv(hist_path) if hist_path.exists() else pd.DataFrame()
                     pd.concat([old,gdf],ignore_index=True).to_csv(hist_path,index=False); st.success("Graded history updated.")
         else: st.error("CSV needs player, prop, actual columns.")
     if hist_path.exists():
         h=pd.read_csv(hist_path); st.caption(f"Historical graded rows: {len(h)}")
-        if len(h): st.dataframe(h.tail(100),use_container_width=True,hide_index=True)
+        if len(h): st.dataframe(h.tail(100),width="stretch",hide_index=True)
 
 st.caption("Model note: projections are estimates, not guarantees. Early-season CFB samples are noisy; the app exposes data readiness and avoids manufacturing missing inputs.")
