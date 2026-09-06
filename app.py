@@ -10,10 +10,10 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
-from free_data_v15 import load_free_stack
+from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 
-APP_VERSION = "CFB Prop Engine v1.5 — WORKING LIVE CFB BOARD"
+APP_VERSION = "CFB Prop Engine v1.6 — LIVE CFB BOARD + CURRENT SLATE"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -557,6 +557,9 @@ with st.spinner("Loading FREE CFB data…"):
     else:
         bundle,ctx,players,market_map=load_free_stack(int(year),int(week))
         data_mode="FREE SportsDataverse/NCAA"
+active_week=int(bundle.get("resolved_week",week)) if isinstance(bundle,dict) else int(week)
+if active_week!=int(week):
+    st.sidebar.info(f"Live source currently labels this slate as Week {active_week}; using that automatically.")
 injuries_df=load_optional_csv("injuries.csv")
 depth_df=load_optional_csv("depth_chart.csv")
 game_context_df=load_optional_csv("game_context.csv")
@@ -564,7 +567,7 @@ game_context_df=load_optional_csv("game_context.csv")
 # Current week games
 week_games=[]
 for g in bundle.get("games",[]):
-    if int(sf(g.get("week"),0))!=int(week): continue
+    if int(sf(g.get("week"),0))!=int(active_week): continue
     away=g.get("away_team") or g.get("awayTeam"); home=g.get("home_team") or g.get("homeTeam")
     if not away or not home: continue
     market=market_map.get((norm_name(away),norm_name(home)),{})
@@ -577,6 +580,8 @@ for g in bundle.get("games",[]):
         pg["model_total"]-=1.0; pg["home_points"]-=.5; pg["away_points"]-=.5; pg["tags"].append("🌧️ WEATHER RISK")
     pg["weather"]={"wind_mph":wind,"precip_prob":precip,"temp_f":temp}
     pg["game_id"]=g.get("id"); pg["start_date"]=g.get("start_date") or g.get("startDate")
+    pg["away_abbreviation"]=g.get("away_abbreviation") or g.get("awayAbbreviation") or ""
+    pg["home_abbreviation"]=g.get("home_abbreviation") or g.get("homeAbbreviation") or ""
     week_games.append(pg)
 
 TAB_EVENTS,TAB_PLAYERS,TAB_RANK,TAB_DATA,TAB_GRADE=st.tabs(["Events","Players","Power Board","Data Health","Save + Grade"])
@@ -670,7 +675,10 @@ with TAB_PLAYERS:
             if row_game is None:
                 ra,rh=norm_name(r.get("away")),norm_name(r.get("home"))
                 for gg in week_games:
-                    if (ra and rh and ((norm_name(gg["away"])==ra and norm_name(gg["home"])==rh) or (ra in norm_name(gg["away"]) and rh in norm_name(gg["home"])))):
+                    ga=norm_name(gg.get("away_abbreviation")); gh=norm_name(gg.get("home_abbreviation"))
+                    full_match=(ra and rh and ((norm_name(gg["away"])==ra and norm_name(gg["home"])==rh) or (ra in norm_name(gg["away"]) and rh in norm_name(gg["home"]))))
+                    abbr_match=(ra and rh and ga==ra and gh==rh)
+                    if full_match or abbr_match:
                         row_game=gg; break
                 if row_game is None:
                     # Build a neutral placeholder game so the live line still appears instead of blanking the board.
@@ -726,7 +734,7 @@ with TAB_PLAYERS:
 
 with TAB_DATA:
     st.subheader("Data Readiness")
-    st.success(f"Active source: {data_mode} · Games: {len(week_games)} · Players: {len(players) if players is not None else 0}")
+    st.success(f"Active source: {data_mode} · Active Week: {active_week} · Games: {len(week_games)} · Players: {len(players) if players is not None else 0}")
     checks=[]
     for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
         v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
