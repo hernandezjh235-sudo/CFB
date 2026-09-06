@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from datetime import datetime, timezone
 import math, re
 from typing import Dict, Tuple
 import numpy as np
@@ -9,6 +10,8 @@ import requests
 
 RAW='https://raw.githubusercontent.com/sportsdataverse/cfbfastR-cfb-data/main/cfb'
 NCAA='https://ncaa-api.henrygd.me'
+ESPN='https://site.api.espn.com/apis/site/v2/sports/football/college-football'
+HEADERS={'User-Agent':'Mozilla/5.0','Accept':'application/json,text/plain,*/*'}
 
 def _norm(s): return re.sub(r'[^a-z0-9]','',str(s).lower())
 def _num(v, d=0.0):
@@ -16,10 +19,14 @@ def _num(v, d=0.0):
         x=float(v); return x if math.isfinite(x) else d
     except Exception: return d
 
+def _get(url, params=None, timeout=20):
+    r=requests.get(url,params=params or {},headers=HEADERS,timeout=timeout)
+    r.raise_for_status(); return r.json()
+
 def _parquet(dataset, year, stem=None, timeout=45):
     stem=stem or dataset
     url=f'{RAW}/{dataset}/parquet/{stem}_{year}.parquet'
-    r=requests.get(url,timeout=timeout); r.raise_for_status()
+    r=requests.get(url,headers=HEADERS,timeout=timeout); r.raise_for_status()
     return pd.read_parquet(BytesIO(r.content))
 
 def _col(df,*names):
@@ -46,6 +53,74 @@ def _text(df,*names,default=''):
 def _z(s):
     s=pd.to_numeric(s,errors='coerce'); sd=s.std(skipna=True)
     return (s-s.mean(skipna=True))/(sd if sd and sd>1e-9 else 1.0)
+
+def espn_scoreboard(year:int, week:int):
+    try:
+        return _get(f'{ESPN}/scoreboard',{'dates':int(year),'seasontype':2,'week':int(week),'groups':80,'limit':500},20)
+    except Exception:
+        return {}
+
+def detect_current_week(year:int) -> int:
+    """Find the real current CFB week from ESPN instead of guessing from day-of-year."""
+    now=datetime.now(timezone.utc)
+    best=None
+    for wk in range(0,6):
+        data=espn_scoreboard(year,wk)
+        events=data.get('events') or []
+        dates=[]
+        for e in events:
+            try: dates.append(datetime.fromisoformat(str(e.get('date')).replace('Z','+00:00')))
+            except Exception: pass
+        if dates:
+            dist=min(abs((d-now).total_seconds()) for d in dates)
+            if best is None or dist<best[0]: best=(dist,wk)
+    if best is not None:
+        return max(1,int(best[1]))
+    # Fallback: opening Saturday is treated as Week 0; the following Saturday is Week 1.
+    anchor=datetime(year,8,29,tzinfo=timezone.utc)
+    return max(1,min(20,int((now-anchor).days//7)))
+
+def _espn_games(year:int, week:int):
+    data=espn_scoreboard(year,week)
+    out=[]; team_meta={}; odds={}
+    for e in data.get('events') or []:
+        comp=(e.get('competitions') or [{}])[0]
+        competitors=comp.get('competitors') or []
+        home=away=None; hp=ap=None
+        for c in competitors:
+            team=c.get('team') or {}; name=team.get('displayName') or team.get('shortDisplayName') or team.get('name')
+            if name:
+                logos=team.get('logos') or []
+                team_meta[name]={
+                    'logo': (logos[0].get('href') if logos and isinstance(logos[0],dict) else ''),
+                    'color': '#'+str(team.get('color') or '2f81f7').lstrip('#'),
+                    'alternate_color':'#'+str(team.get('alternateColor') or '').lstrip('#') if team.get('alternateColor') else '',
+                    'abbreviation':team.get('abbreviation') or '',
+                    'id':team.get('id') or '',
+                }
+            score=_num(c.get('score'),np.nan)
+            if c.get('homeAway')=='home': home=name; hp=None if math.isnan(score) else score
+            elif c.get('homeAway')=='away': away=name; ap=None if math.isnan(score) else score
+        if not home or not away: continue
+        out.append({'id':str(e.get('id') or ''),'week':int(week),'home_team':home,'away_team':away,
+                    'home_points':hp,'away_points':ap,'start_date':e.get('date') or '',
+                    'neutral_site':bool(comp.get('neutralSite')),'status':((e.get('status') or {}).get('type') or {}).get('name') or ''})
+        pick=(comp.get('odds') or [{}])[0]
+        if isinstance(pick,dict) and pick:
+            spread=_num(pick.get('spread'),np.nan); total=_num(pick.get('overUnder'),np.nan)
+            details=str(pick.get('details') or '')
+            # ESPN spread is typically favorite-centric; use details to orient home spread when possible.
+            home_spread=None
+            if not math.isnan(spread):
+                habbr=team_meta.get(home,{}).get('abbreviation','')
+                aabbr=team_meta.get(away,{}).get('abbreviation','')
+                if habbr and details.upper().startswith(habbr.upper()): home_spread=-abs(spread)
+                elif aabbr and details.upper().startswith(aabbr.upper()): home_spread=abs(spread)
+                else: home_spread=float(spread)
+            odds[(_norm(away),_norm(home))]={'away':away,'home':home,'market_home_spread':home_spread,
+                                             'market_total':None if math.isnan(total) else float(total),
+                                             'source':'ESPN current lines'}
+    return out,team_meta,odds
 
 def _schedule_rows(df, week):
     if df is None or df.empty:return []
@@ -82,12 +157,10 @@ def _players(df, through_week):
     for k,a in aliases.items(): tmp[k]=_series(df,*a)
     tmp=tmp[(tmp.player!='')&(tmp.team!='')]
     agg={k:'sum' for k in aliases}; agg['game']='nunique'
-    out=tmp.groupby(['player','team'],as_index=False).agg(agg).rename(columns={'game':'games'})
-    return out
+    return tmp.groupby(['player','team'],as_index=False).agg(agg).rename(columns={'game':'games'})
 
 def _team_context(schedule, adv, pidx, through_week):
     teams={}
-    # Start from schedule results: scoring margin, points for/against, recent strength.
     wc=_col(schedule,'week') if schedule is not None else None
     s=schedule.copy() if schedule is not None else pd.DataFrame()
     if wc: s=s[pd.to_numeric(s[wc],errors='coerce').fillna(99)<=int(through_week)]
@@ -105,7 +178,6 @@ def _team_context(schedule, adv, pidx, through_week):
         for _,r in g.iterrows():
             teams[r.team]={'sp':r['margin'],'srs':r['margin'],'core':r['margin']*4,'elo':1500+r['power']*85,'talent':0,
                            'off_rating':(r['pf']-28)/4,'def_rating':(28-r['pa'])/4,'pace':0,'off_expl':0,'def_expl':0,'def_passing':0,'def_rushing':0,'havoc':0}
-    # Enrich with ESPN FPI/power index when present.
     if pidx is not None and not pidx.empty:
         tc=_col(pidx,'team','team_display_name','team_name'); rc=_col(pidx,'fpi','rating','power_index','powerindex')
         oc=_col(pidx,'offense','offensive_efficiency'); dc=_col(pidx,'defense','defensive_efficiency')
@@ -117,7 +189,6 @@ def _team_context(schedule, adv, pidx, through_week):
                 if rc: d['sp']=_num(r.get(rc)); d['srs']=d['sp']; d['core']=d['sp']*4
                 if oc: d['off_rating']=_num(r.get(oc))
                 if dc: d['def_rating']=_num(r.get(dc))
-    # Advanced team game logs: derive pass/rush matchup, explosiveness, havoc/pace using flexible column matching.
     if adv is not None and not adv.empty:
         wc=_col(adv,'week')
         if wc: adv=adv[pd.to_numeric(adv[wc],errors='coerce').fillna(99)<=int(through_week)]
@@ -128,13 +199,11 @@ def _team_context(schedule, adv, pidx, through_week):
               'pace':('plays','offensive_plays','total_plays'),'def_passing':('def_pass_epa','defensive_passing_epa','pass_epa_allowed','opponent_pass_epa'),
               'def_rushing':('def_rush_epa','defensive_rushing_epa','rush_epa_allowed','opponent_rush_epa'),'def_expl':('def_explosiveness','explosiveness_allowed'),
               'off_expl':('off_explosiveness','explosiveness'),'havoc':('havoc','def_havoc','defensive_havoc')}
-            grp=adv.groupby('_team')
-            for t,sub in grp:
+            for t,sub in adv.groupby('_team'):
                 d=teams.setdefault(t,{'sp':0,'srs':0,'core':0,'elo':1500,'talent':0,'off_rating':0,'def_rating':0,'pace':0,'off_expl':0,'def_expl':0,'def_passing':0,'def_rushing':0,'havoc':0})
                 for key,als in feature_alias.items():
                     c=_col(sub,*als)
                     if c: d[key]=float(pd.to_numeric(sub[c],errors='coerce').mean())
-    # Rank from composite power. Higher offense/margin, lower defensive EPA allowed.
     names=list(teams)
     vals=np.array([_num(teams[t].get('sp'))+0.18*_num(teams[t].get('off_rating'))-0.18*_num(teams[t].get('def_rating')) for t in names])
     mu=float(np.nanmean(vals)) if len(vals) else 0; sd=float(np.nanstd(vals)) if len(vals) else 1; sd=sd if sd>1e-9 else 1
@@ -143,21 +212,24 @@ def _team_context(schedule, adv, pidx, through_week):
     return teams
 
 def ncaa_ap_rankings():
-    try:
-        r=requests.get(f'{NCAA}/rankings/football/fbs/associated-press',timeout=12); r.raise_for_status(); j=r.json()
-        rows=j.get('data') or j.get('rankings') or j.get('content') or []
-        out={}
-        def walk(x):
-            if isinstance(x,dict):
-                team=x.get('school') or x.get('team') or x.get('name'); rank=x.get('rank') or x.get('ranking')
-                if team and rank:
-                    try: out[str(team)]=int(rank)
-                    except: pass
-                for v in x.values(): walk(v)
-            elif isinstance(x,list):
-                for v in x: walk(v)
-        walk(rows); return out
-    except Exception: return {}
+    # ESPN ranking endpoint is the primary free source; NCAA mirror remains fallback.
+    for url in (f'{ESPN}/rankings', f'{NCAA}/rankings/football/fbs/associated-press'):
+        try:
+            j=_get(url,timeout=12); out={}
+            def walk(x):
+                if isinstance(x,dict):
+                    team=x.get('school') or x.get('team') or x.get('name') or x.get('displayName'); rank=x.get('rank') or x.get('ranking') or x.get('current')
+                    if isinstance(team,dict): team=team.get('displayName') or team.get('name')
+                    if team and rank:
+                        try: out[str(team)]=int(rank)
+                        except Exception: pass
+                    for v in x.values(): walk(v)
+                elif isinstance(x,list):
+                    for v in x: walk(v)
+            walk(j)
+            if out: return out
+        except Exception: pass
+    return {}
 
 def load_free_stack(year:int, week:int):
     errors={}; health={}
@@ -171,15 +243,25 @@ def load_free_stack(year:int, week:int):
     adv=grab('adv_team','adv_team')
     pidx=grab('power_index','power_index')
     betting=grab('betting','betting')
-    games=_schedule_rows(schedule,week)
+
+    # Current-week schedule/team identity/lines come from ESPN so the app is live even
+    # before the batch parquet files refresh. Historical/model inputs stay SportsDataverse.
+    espn_games,team_meta,espn_market=_espn_games(year,week)
+    sd_games=_schedule_rows(schedule,week)
+    games=espn_games or sd_games
     players=_players(player_box,week)
     ctx=_team_context(schedule,adv,pidx,week)
+    for g in games:
+        for t in (g.get('home_team'),g.get('away_team')):
+            if t:
+                ctx.setdefault(t,{'sp':0,'srs':0,'core':0,'elo':1500,'talent':0,'off_rating':0,'def_rating':0,'pace':0,'off_expl':0,'def_expl':0,'def_passing':0,'def_rushing':0,'havoc':0})
+                ctx[t].update(team_meta.get(t,{}))
     ap=ncaa_ap_rankings()
     for t,r in ap.items():
         for key in list(ctx):
             if _norm(key)==_norm(t): ctx[key]['ap_rank']=r
-    # Free game-line layer from SportsDataverse betting dataset where available.
-    market={}
+
+    market=dict(espn_market)
     if betting is not None and not betting.empty:
         away=_text(betting,'away_team','away_display_name'); home=_text(betting,'home_team','home_display_name')
         spread=_series(betting,'spread','home_spread','spread_line',default=np.nan); total=_series(betting,'over_under','total','total_line',default=np.nan)
@@ -187,8 +269,11 @@ def load_free_stack(year:int, week:int):
         for i in betting.index:
             if int(_num(bw.loc[i],week))!=int(week): continue
             if not away.loc[i] or not home.loc[i]: continue
-            market[(_norm(away.loc[i]),_norm(home.loc[i]))]={'away':away.loc[i],'home':home.loc[i],
+            key=(_norm(away.loc[i]),_norm(home.loc[i]))
+            market.setdefault(key,{'away':away.loc[i],'home':home.loc[i],
                 'market_home_spread':None if pd.isna(spread.loc[i]) else float(spread.loc[i]),
-                'market_total':None if pd.isna(total.loc[i]) else float(total.loc[i])}
+                'market_total':None if pd.isna(total.loc[i]) else float(total.loc[i]),'source':'SportsDataverse'})
+
+    health['espn_week_games']=len(espn_games); health['parsed_players']=len(players); health['team_context']=len(ctx)
     bundle={'games':games,'teams':[],'sp':[],'core':[],'srs':[],'elo':[],'rankings':[],'talent':[],'player_stats':[],'advanced':[],'errors':errors,'free_health':health}
     return bundle,ctx,players,market
