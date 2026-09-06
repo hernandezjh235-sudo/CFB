@@ -59,11 +59,14 @@ def _team(*objs):
     return ''
 def _game_names(g):
     if not isinstance(g,dict):return '','',''
-    away=str(g.get('away_team') or g.get('away_team_name') or g.get('away') or '').strip(); home=str(g.get('home_team') or g.get('home_team_name') or g.get('home') or '').strip(); title=str(g.get('title') or g.get('matchup') or g.get('name') or '').strip()
-    if (not away or not home) and title:
-        parts=re.split(r'\s+(?:@|at|vs\.?|v\.)\s+',title,maxsplit=1,flags=re.I)
+    away=str(g.get('away_team') or g.get('away_team_name') or g.get('away') or '').strip(); home=str(g.get('home_team') or g.get('home_team_name') or g.get('home') or '').strip()
+    full=str(g.get('full_team_names_title') or '').strip()
+    title=str(g.get('title') or g.get('abbreviated_title') or g.get('matchup') or g.get('name') or '').strip()
+    source=full or title
+    if (not away or not home) and source:
+        parts=re.split(r'\s+(?:@|at|vs\.?|v\.)\s+',source,maxsplit=1,flags=re.I)
         if len(parts)==2:away=away or parts[0].strip();home=home or parts[1].strip()
-    return away,home,f'{away} @ {home}' if away and home else title
+    return away,home,f'{away} @ {home}' if away and home else source
 
 def _line_row(name,team,prop,line,source_url,game=None,line_obj=None,event_id=''):
     game=game or {}; line_obj=line_obj or {}; away,home,matchup=_game_names(game)
@@ -89,8 +92,16 @@ def _native(data,url):
         if not name:continue
         mid=app.get('match_id') or stat.get('match_id') or ou.get('match_id') or lo.get('match_id') or lo.get('game_id'); game=games.get(str(mid),{}) if mid is not None else {}
         if not _cfb_blob(lo,ou,stat,app,p,game) and 'sport_id=' not in url:continue
-        tid=app.get('team_id') or p.get('team_id'); t=_team(app,p,teams.get(str(tid),{}) if tid is not None else {})
-        out.append(_line_row(name,t,prop,line,url,game,lo,mid))
+        tid=str(app.get('team_id') or p.get('team_id') or '')
+        ga,gh,_gm=_game_names(game)
+        if tid and tid==str(game.get('away_team_id') or ''): t=ga
+        elif tid and tid==str(game.get('home_team_id') or ''): t=gh
+        else: t=_team(app,p,teams.get(tid,{}) if tid else {})
+        row=_line_row(name,t,prop,line,url,game,lo,mid)
+        row['team_id']=tid
+        row['position']=str(p.get('position_name') or p.get('position_display_name') or '')
+        row['player_image_url']=str(p.get('image_url') or p.get('light_image_url') or '')
+        out.append(row)
     return out
 
 def _jsonapi(data,url):

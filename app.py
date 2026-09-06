@@ -16,7 +16,7 @@ from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_mon
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 
-APP_VERSION = "CFB Prop Engine v2.4 — NFL-STYLE COMPLETE OPPORTUNITY + ADVANCED DATA"
+APP_VERSION = "CFB Prop Engine v2.4.1 — NFL-STYLE LIVE TEAM + COMPLETE OPPORTUNITY"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -832,18 +832,21 @@ with TAB_PLAYERS:
                     away=r.get("away") or "Away"; home=r.get("home") or "Home"
                     row_game=project_game(away,home,ctx,{},neutral=True)
                     row_game["weather"]={}
-            # Current-season roster identity overrides the historical sample school.
-            current_team=str(pr.get('current_team') or '')
-            team=''
-            if current_team:
+            # Authoritative current team comes from Underdog player team_id matched
+            # to this game's away_team_id/home_team_id. Historical school stays only
+            # as provenance for the player's production sample.
+            live_team=str(r.get('team') or '')
+            team=canonical_prop_team({**r,'team':live_team},row_game,pr)
+            if team not in {row_game['away'],row_game['home']}:
+                team=''
                 for t in [row_game['away'],row_game['home']]:
-                    a,b=norm_name(current_team),norm_name(t)
-                    if a==b or (len(a)>=4 and (a in b or b in a)):
-                        team=t; break
-            if not team: team=canonical_prop_team(r,row_game,pr)
+                    a,b=norm_name(live_team),norm_name(t)
+                    if a and (a==b or a in b or b in a): team=t; break
             opp=row_game["home"] if team==row_game["away"] else row_game["away"]
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
-            proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,row_game,team or "")
+            model_pr=dict(pr)
+            if team: model_pr['current_team']=team
+            proj,sd,notes=player_projection(model_pr,r.get("prop"),tc,oc,row_game,team or "")
             avail,avail_notes=player_availability(r.get("player",""),team or "",injuries_df,depth_df)
             proj*=avail; sd=max(sd*.92, sd*math.sqrt(max(avail,.25))); notes.extend(avail_notes)
             weather=row_game.get("weather",{}) or {}; wind=sf(weather.get("wind_mph")); precip=sf(weather.get("precip_prob"))
@@ -858,10 +861,10 @@ with TAB_PLAYERS:
             # Reliability calibration. Early CFB samples and prior-season role changes
             # should never print fake 98-100% certainty. Keep direction/edge intact
             # while widening uncertainty until current-season opportunity is proven.
-            src=str(pr.get("sample_source") or "fallback").lower(); gp=sf(pr.get("games"),0)
-            roster_confirmed=bool(pr.get('current_team')) or src=='current'
-            transferred=bool(pr.get('current_team') and pr.get('team') and norm_name(pr.get('current_team'))!=norm_name(pr.get('team')))
-            has_adv=any(sf(pr.get(k))>0 for k in ['adv_pass_att','adv_rush_car','adv_targets'])
+            src=str(model_pr.get("sample_source") or "fallback").lower(); gp=sf(model_pr.get("games"),0)
+            roster_confirmed=bool(model_pr.get('current_team')) or src=='current'
+            transferred=bool(model_pr.get('current_team') and model_pr.get('team') and norm_name(model_pr.get('current_team'))!=norm_name(model_pr.get('team')))
+            has_adv=any(sf(model_pr.get(k))>0 for k in ['adv_pass_att','adv_rush_car','adv_targets'])
             if src=="current": pcap=.74 if gp<=1 else (.82 if gp<=3 else .88)
             elif src=="prior": pcap=.72 if roster_confirmed else .64
             elif src=="roster": pcap=.62
