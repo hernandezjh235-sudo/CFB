@@ -13,8 +13,9 @@ import streamlit as st
 from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_moneyline_nfl, render_player_nfl, render_fast_rows
+from cfb_runtime_v19 import annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope, local_now, scope_target_date, logo_coverage
 
-APP_VERSION = "CFB Prop Engine v1.8 — NFL-STYLE MONEYLINE + FAST ROWS"
+APP_VERSION = "CFB Prop Engine v1.9 — DAY-AWARE + LOGO-LOCKED FAST BOARD"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -565,6 +566,7 @@ with st.spinner("Loading FREE CFB data…"):
         bundle,ctx,players,market_map=load_free_stack(int(year),int(week))
         data_mode="FREE SportsDataverse/NCAA"
 ctx=hydrate_team_branding(ctx)
+ctx=ensure_branding(ctx,bundle.get("games",[]),players)
 inject_nfl_cfb_css()
 active_week=int(bundle.get("resolved_week",week)) if isinstance(bundle,dict) else int(week)
 if active_week!=int(week):
@@ -593,14 +595,23 @@ for g in bundle.get("games",[]):
     pg["home_abbreviation"]=g.get("home_abbreviation") or g.get("homeAbbreviation") or ""
     week_games.append(pg)
 
-TAB_EVENTS,TAB_PLAYERS,TAB_RANK,TAB_DATA,TAB_GRADE=st.tabs(["Events","Players","Power Board","Data Health","Save + Grade"])
+week_games=annotate_games(week_games)
+pt_now=local_now()
+slate_scope=st.radio("Slate",["Today","Tomorrow","All Week"],horizontal=True,index=0,label_visibility="collapsed",key="cfb_slate_scope")
+target_date=scope_target_date(slate_scope,pt_now)
+display_games=filter_games_by_scope(week_games,slate_scope,pt_now)
+slate_label=(target_date.strftime("%A, %B %-d") if target_date else f"Week {active_week}")
+st.markdown(f"<div class='cfb-live-strip'><b>{slate_scope}</b> · {slate_label} · {len(display_games)} games · {pt_now.strftime('%-I:%M %p PT')}</div>",unsafe_allow_html=True)
+
+TAB_EVENTS,TAB_PLAYERS,TAB_RANK,TAB_DATA,TAB_GRADE=st.tabs(["🏟️ Games","⚡ Player Props","Power","Data","Grade"])
 
 with TAB_EVENTS:
     st.subheader("Moneyline · Spread · Total")
-    st.caption("Moneyline blends SP+, CORE, SRS, Elo, talent and home field. AP rank is displayed as context only. Totals use offense/defense quality, pace and explosiveness, with market lines only as a small stabilizer/audit.")
-    if not week_games: st.info("No games loaded for this week yet. Try Refresh or a different week.")
+    st.caption("NFL-style CFB game board · local-day slate · model winner · spread · total")
+    if not display_games:
+        st.info(f"No games on {slate_label}. Switch to Tomorrow or All Week.")
     else:
-        for g in sorted(week_games,key=lambda x:x.get("start_date") or ""):
+        for g in sorted(display_games,key=lambda x:x.get("start_date") or ""):
             render_moneyline_nfl(g,ctx)
 
 with TAB_RANK:
@@ -616,10 +627,10 @@ with TAB_RANK:
 
 with TAB_PLAYERS:
     st.subheader("Player Props")
-    st.caption("Opportunity first: expected attempts/carries/receptions are adjusted by game script, pace, opponent unit strength, explosive/havoc matchup and CFB blowout playing-time risk.")
-    game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in week_games]
+    st.caption("Live CFB lines → matchup + usage → projection → Higher/Lower probability")
+    game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in display_games]
     selected_label=st.selectbox("Game / board",game_labels,index=0)
-    selected_game=None if selected_label=="ALL LIVE CFB PROPS" else week_games[[f"{g['away']} @ {g['home']}" for g in week_games].index(selected_label)]
+    selected_game=None if selected_label=="ALL LIVE CFB PROPS" else display_games[[f"{g['away']} @ {g['home']}" for g in display_games].index(selected_label)]
     live_sources=["Underdog Live"] + (["Live Odds API"] if odds.ready else []) + ["Manual"]
     source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
@@ -633,6 +644,7 @@ with TAB_PLAYERS:
                 st.session_state["ud_cfb_rows"]=ud_rows
                 st.session_state["ud_cfb_debug"]=ud_debug
             ud_rows=st.session_state.get("ud_cfb_rows",[])
+            ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
             prop_rows=list(ud_rows) if selected_game is None else props_for_game(ud_rows,selected_game["away"],selected_game["home"])
             # Some Underdog CFB rows carry a school abbreviation while the free
             # schedule uses the full school name. Player lookup below canonicalizes
@@ -759,7 +771,10 @@ with TAB_PLAYERS:
 
 with TAB_DATA:
     st.subheader("Data Readiness")
-    st.success(f"Active source: {data_mode} · Active Week: {active_week} · Games: {len(week_games)} · Players: {len(players) if players is not None else 0}")
+    brand_health=logo_coverage(ctx,week_games)
+    st.success(f"Active source: {data_mode} · Active Week: {active_week} · Games: {len(week_games)} · Players: {len(players) if players is not None else 0} · Team logos: {brand_health['logos']}/{brand_health['teams']}")
+    if brand_health.get("missing"):
+        st.caption("Missing logo aliases: "+", ".join(brand_health["missing"][:12]))
     checks=[]
     for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
         v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
