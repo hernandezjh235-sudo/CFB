@@ -134,6 +134,24 @@ def load_free_stack(year:int, week:int):
                 if abbr:
                     alias=dict(d);alias['canonical_name']=name;ctx[abbr]=alias
 
+    # Player-box team fields can be ESPN numeric IDs. Convert them to the same
+    # canonical school names used by the game/context layer so logos, opponents,
+    # and matchup metrics resolve correctly in the player board.
+    if players is not None and not players.empty and 'team' in players.columns:
+        id_to_name={}
+        for key,d in list(ctx.items()):
+            if not isinstance(d,dict):continue
+            eid=str(d.get('espn_id') or '').strip()
+            cname=str(d.get('canonical_name') or key or '').strip()
+            if eid and eid.lower()!='nan' and cname:
+                id_to_name[eid]=cname
+        def _canon_player_team(v):
+            raw=str(v or '').strip()
+            if raw in id_to_name:return id_to_name[raw]
+            d=ctx.get(raw,{}) or {}
+            return str(d.get('canonical_name') or raw)
+        players['team']=players['team'].map(_canon_player_team)
+
     cur_team=_team_baselines(team_box,resolved_week)
     prev_team=_team_baselines(prev_team_box,None)
     all_teams=set(ctx)|set(cur_team)|set(prev_team)

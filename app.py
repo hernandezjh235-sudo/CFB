@@ -16,7 +16,7 @@ from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_mon
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 
-APP_VERSION = "CFB Prop Engine v2.0 — NFL-STYLE AUTO SLATE + PLAYER BASELINES"
+APP_VERSION = "CFB Prop Engine v2.1 — NFL-STYLE FINAL BOARD + OPPORTUNITY CALIBRATION"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -362,6 +362,18 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     rush_y=sf(player.get("rush_yds"))/gp; rush_att=sf(player.get("rush_att"))/gp
     rec_y=sf(player.get("rec_yds"))/gp; recs=sf(player.get("receptions"))/gp
     pass_td=sf(player.get("pass_td"))/gp; ints=sf(player.get("pass_int"))/gp
+    sample_source=str(player.get("sample_source") or "current").lower()
+    # Opening-week opportunity correction: an active QB/skill prop indicates the
+    # player has a meaningful current role, while an old tiny backup sample may not.
+    # We do NOT use the sportsbook line value to set the projection; we only shrink
+    # stale/small personal samples toward independent team production.
+    team_pass=sf(team_ctx.get("team_pass_yds_pg")); team_att=sf(team_ctx.get("team_pass_att_pg")); team_comp=sf(team_ctx.get("team_pass_comp_pg"))
+    if sample_source=="prior" and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Pass + Rush Yards"}:
+        rel=clamp(gp/(gp+7.0),.18,.72)
+        if team_pass>0 and (pass_y<=0 or pass_y < team_pass*.62):
+            pass_y=rel*pass_y + (1-rel)*(team_pass*.90); notes.append("role reset: prior backup sample shrunk to team QB baseline")
+        if team_att>0 and (pass_att<=0 or pass_att < team_att*.62): pass_att=rel*pass_att + (1-rel)*(team_att*.90)
+        if team_comp>0 and (comp<=0 or comp < team_comp*.62): comp=rel*comp + (1-rel)*(team_comp*.90)
     # NFL-app style opening-week fallback: use independent team production baselines
     # when the player has no current/prior personal sample. The prop line is NOT used
     # to manufacture the projection.
@@ -797,6 +809,14 @@ with TAB_PLAYERS:
                 side="Over" if proj>=sf(r.get("line")) else "Under"
                 notes.append("side selected from model vs live Underdog line")
             p=prop_probability(proj,r.get("line"),sd,side)
+            # Reliability calibration. Early CFB samples and prior-season role changes
+            # should never print fake 98-100% certainty. Keep direction/edge intact
+            # while widening uncertainty until current-season opportunity is proven.
+            src=str(pr.get("sample_source") or "fallback").lower(); gp=sf(pr.get("games"),0)
+            if src=="current": pcap=.72 if gp<=1 else (.80 if gp<=3 else .88)
+            elif src=="prior": pcap=.76 if gp>=8 else .70
+            else: pcap=.66
+            p=min(max(p,1-pcap),pcap)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status="PLAYABLE" if p>=.60 and proj>0 else "LEAN" if p>=.56 and proj>0 else "TRACK"
             q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
