@@ -16,8 +16,9 @@ from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_mon
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 from cfb_opportunity_v25 import enrich_opportunity, automatic_weather
+from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player_blowout_modifier
 
-APP_VERSION = "CFB Prop Engine v2.4.1 — NFL-STYLE LIVE TEAM + COMPLETE OPPORTUNITY"
+APP_VERSION = "CFB Prop Engine v2.6 — COACH-AWARE BLOWOUT + COMPLETE OPPORTUNITY"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -301,16 +302,23 @@ def project_game(away:str,home:str,ctx:dict,market:dict|None=None,neutral=False)
     home_pts=(total+model_margin)/2; away_pts=(total-model_margin)/2
 
     talent_gap=(sf(h.get("talent"))-sf(a.get("talent")))
-    blowout_p=logistic((abs(model_margin)-17)/5.5 + min(abs(talent_gap)/500,1.2))
     favorite=home if model_margin>=0 else away
+    # Dedicated CFB blowout engine: projected margin + power/talent gap + explosive
+    # mismatch + underdog drive sustainability + turnover risk + historical coach hook.
+    blow_profile=game_blowout_profile({"away":away,"home":home,"model_home_margin":model_margin,"model_total":total,"favorite":favorite},h,a)
+    blowout_p=sf(blow_profile.get("blowout_prob"))
     tags=[]
     pass_funnel_home = sf(a.get("def_passing"))-sf(a.get("def_rushing"))
     pass_funnel_away = sf(h.get("def_passing"))-sf(h.get("def_rushing"))
     if total>=61: tags.append("🔥 SHOOTOUT")
-    if abs(model_margin)>=21: tags.append("⚠️ BLOWOUT RISK")
+    if blow_profile.get("blowout_level") in {"HIGH","EXTREME"}: tags.append(f"⚠️ {blow_profile.get('blowout_level')} BLOWOUT")
+    if sf(blow_profile.get("coach_hook_aggression"))>=.55: tags.append("🔄 EARLY HOOK TEAM")
     if pace>0.4: tags.append("⚡ FAST PACE")
     return {"away":away,"home":home,"model_home_margin":model_margin,"home_win_prob":home_wp,"away_win_prob":1-home_wp,"model_total":total,"home_points":home_pts,"away_points":away_pts,"blowout_prob":blowout_p,"favorite":favorite,"tags":tags,"home_pass_funnel":pass_funnel_home,"away_pass_funnel":pass_funnel_away,
-            "market_home_spread":market.get("market_home_spread"),"market_total":market.get("market_total"),"home_ap":h.get("ap_rank"),"away_ap":a.get("ap_rank"),"home_model_rank":h.get("model_rank"),"away_model_rank":a.get("model_rank")}
+            "market_home_spread":market.get("market_home_spread"),"market_total":market.get("market_total"),"home_ap":h.get("ap_rank"),"away_ap":a.get("ap_rank"),"home_model_rank":h.get("model_rank"),"away_model_rank":a.get("model_rank"),
+            "blowout_level":blow_profile.get("blowout_level"),"coach_hook_aggression":blow_profile.get("coach_hook_aggression"),
+            "qb_starter_retention":blow_profile.get("qb_starter_retention"),"wr1_retention":blow_profile.get("wr1_retention"),"rb1_retention":blow_profile.get("rb1_retention"),
+            "backup_opportunity":blow_profile.get("backup_opportunity"),"underdog_catchup_mult":blow_profile.get("underdog_catchup_mult"),"blowout_components":blow_profile.get("blowout_components",{})}
 
 
 def parse_player_stats(rows:list, games_played:dict)->pd.DataFrame:
@@ -356,19 +364,9 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     rush_script=1.0 + clamp(team_margin/140,-.11,.14)
     pace_adj=1.0+clamp((sf(team_ctx.get("pace"))+sf(opp_ctx.get("pace")))/140,-.06,.08)
     snap_adj=1.0
-    if is_fav and blow>.55:
-        snap_adj=1.0-(blow-.55)*.24
-        notes.append("blowout playing-time tax")
-    elif not is_fav and blow>.60:
-        notes.append("underdog catch-up volume")
-    # CFB starters get pulled much earlier than NFL starters. Use actual QB1 share and
-    # current roster starter status to make the hook tax role-aware.
-    qb1_share=clamp(sf(team_ctx.get('qb1_attempt_share')),0,1)
     starter_current=bool(player.get('starter_current'))
-    if is_fav and blow>.52 and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Receiving Yards","Receptions","Pass + Rush Yards"}:
-        hook=(blow-.52)*(.32 if qb1_share<.86 else .24)
-        snap_adj*=clamp(1-hook,.76,1.0); notes.append("CFB starter hook/share adjustment")
     if starter_current: notes.append("current starter confirmed")
+    if blow>=.55: notes.append("v2.6 coach-aware blowout engine active")
     pass_def=sf(opp_ctx.get("def_passing")); rush_def=sf(opp_ctx.get("def_rushing")); expl_def=sf(opp_ctx.get("def_expl")); havoc=sf(opp_ctx.get("havoc"))
     pass_match=clamp(1.0 + (-pass_def)*.018 + (-expl_def)*.007 - havoc*.004, .78,1.23)
     rush_match=clamp(1.0 + (-rush_def)*.020 - havoc*.003, .78,1.24)
@@ -494,6 +492,11 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
         proj=max(.02,(sf(player.get("pass_td"))+sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj*scoring_env); sd=max(.7,math.sqrt(proj))
     else:
         proj=0; sd=1
+    # Final mean/variance adjustment comes from the dedicated game-state engine.
+    # It is position/market aware: favorite QB/WR hook, RB early-volume vs late hook,
+    # backup rushing opportunity, and underdog catch-up passing/targets.
+    blow_mult,blow_sd,blow_notes,_ret=player_blowout_modifier(player,market_label,game,team_name,team_ctx)
+    proj*=blow_mult; sd*=blow_sd; notes.extend(blow_notes)
     if proj<=0: notes.append("insufficient player sample")
     return float(max(0,proj)),float(sd),notes
 
@@ -671,8 +674,12 @@ with st.spinner("Loading FREE CFB data…"):
     # v2.5: enrich both free and optional-CFBD modes with the same no-key CFB
     # drive/opportunity context. This layer never uses the sportsbook line to set a projection.
     ctx,players,opportunity_health=enrich_opportunity(int(year),int(bundle.get("resolved_week",week) if isinstance(bundle,dict) else week),ctx,players)
+    # v2.6 derives coach/rotation behavior from prior-season 21+ point games.
+    # It measures starter concentration rather than inventing a universal substitution rule.
+    ctx,blowout_health=enrich_blowout_context(int(year),ctx)
     if isinstance(bundle,dict):
         bundle.setdefault("free_health",{}).update({f"v25_{k}":v for k,v in opportunity_health.items()})
+        bundle.setdefault("free_health",{}).update({f"v26_{k}":v for k,v in blowout_health.items()})
 ctx=hydrate_team_branding(ctx)
 ctx=ensure_branding(ctx,bundle.get("games",[]),players)
 inject_nfl_cfb_css()
@@ -914,7 +921,9 @@ with TAB_PLAYERS:
             if transferred: notes.append('transfer/current-role uncertainty')
             if roster_confirmed: notes.append('current roster confirmed')
             if has_adv: notes.append('2026 advanced usage available')
-            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes))}
+            _bm,_bsd,_bn,starter_retention=player_blowout_modifier(model_pr,r.get("prop"),row_game,team or "",tc)
+            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes)),
+               "blowout_level":row_game.get("blowout_level","LOW"),"blowout_prob":row_game.get("blowout_prob",0),"starter_retention":starter_retention,"backup_opportunity":row_game.get("backup_opportunity",0)}
             projected.append(q)
         pdf=pd.DataFrame(projected)
         show=["player","team","prop","side","line","projection","edge","probability","status","notes"]
