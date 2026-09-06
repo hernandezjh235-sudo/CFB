@@ -1,0 +1,26 @@
+name: Probe CFB v2.5 Opportunity Data
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-v25-opportunity-data.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install pandas pyarrow requests numpy
+      - name: Probe free drive and play schemas
+        run: |
+          python - <<'PY'
+          import free_data_v15 as b
+          for ds in ['drives','play_by_play','team_box','game_rosters']:
+              try:
+                  d=b._parquet(ds,2026,ds)
+                  print('\nDATASET',ds,'ROWS',len(d))
+                  print('COLUMNS',list(d.columns))
+                  print('SAMPLE',d.head(2).to_dict('records'))
+              except Exception as e: print('\nDATASET',ds,'ERROR',e)
+          PY
