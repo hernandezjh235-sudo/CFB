@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -43,9 +45,6 @@ jobs:
           assert len(games)>0
           assert logo_coverage(ctx,games)['coverage']>=.90
           assert health.get('player_box',0)>0 and health.get('team_box',0)>0 and health.get('adv_team',0)>0
-          # At least one of the free current-roster feeds should be available; if not,
-          # current-season player rows still provide roster confirmation and the model
-          # is forced to TRACK prior-only unresolved roles.
           shown=['Trinidad Chambliss','Demond Williams','CJ Carr','Lincoln Kienholz','Caden Pinnick','Colton Joseph']
           out={}
           for n in shown:
@@ -64,4 +63,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app.py free_data_v16.py cfb_runtime_v20.py
           git commit -m 'Apply CFB v2.3 complete free data and opportunity audit [skip ci]' || exit 0
+          git pull --rebase origin main
           git push
