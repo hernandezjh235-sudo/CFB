@@ -21,7 +21,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - name: Run live smoke test
-        run: python scripts/live_smoke_v15.py
+        run: PYTHONPATH=. python scripts/live_smoke_v15.py
       - name: Commit smoke result
         run: |
           git config user.name 'github-actions[bot]'
