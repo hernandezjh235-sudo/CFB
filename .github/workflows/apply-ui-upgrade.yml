@@ -33,3 +33,5 @@ jobs:
           git add app.py
           git commit -m 'Apply CFB v1.2 elite player UI [skip ci]'
           git push
+
+# trigger v1.2 application
