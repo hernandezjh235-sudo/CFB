@@ -33,6 +33,12 @@ jobs:
           from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage
           import re
           def norm(x): return re.sub(r'[^a-z0-9]','',str(x or '').lower())
+          def find_player(df,name):
+              n=norm(name)
+              ex=df[df.player.astype(str).map(norm)==n]
+              if len(ex): return ex.iloc[0]
+              hits=df[df.player.astype(str).map(lambda x: n in norm(x) or norm(x) in n)]
+              return hits.iloc[0] if len(hits)==1 else None
           now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
           props,_=fetch_underdog_cfb_props(force=True)
           pday=filter_props_by_scope(props,'Tomorrow',now)
@@ -49,11 +55,11 @@ jobs:
           }
           result={}
           for name,want in expected.items():
-              hit=players[players.player.astype(str).str.lower()==name.lower()] if not players.empty else players
-              cur=str(hit.iloc[0].get('current_team') or '') if len(hit) else ''
-              hist=str(hit.iloc[0].get('team') or '') if len(hit) else ''
-              result[name]={'rows':len(hit),'current_team':cur,'history_team':hist}
-              assert len(hit)>0, f'no player row for {name}'
+              row=find_player(players,name)
+              assert row is not None, f'no unique player row for {name}'
+              cur=str(row.get('current_team') or '')
+              hist=str(row.get('team') or '')
+              result[name]={'matched_name':str(row.get('player')),'current_team':cur,'history_team':hist}
               assert norm(want) in norm(cur) or norm(cur) in norm(want), f'{name}: expected current {want}, got {cur}'
           print({'free_health':bundle.get('free_health'),'live_props':len(props),'next_day_props':len(pday),'games':len(games),'logos':h,'players':len(players),'roster_checks':result})
           assert bundle.get('free_health',{}).get('rosters',0)>0, 'current roster dataset missing'
