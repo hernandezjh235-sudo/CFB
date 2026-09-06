@@ -13,9 +13,10 @@ import streamlit as st
 from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_moneyline_nfl, render_player_nfl, render_fast_rows
-from cfb_runtime_v19 import annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope, local_now, scope_target_date, logo_coverage
+from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
+    local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 
-APP_VERSION = "CFB Prop Engine v1.9 — DAY-AWARE + LOGO-LOCKED FAST BOARD"
+APP_VERSION = "CFB Prop Engine v2.0 — NFL-STYLE AUTO SLATE + PLAYER BASELINES"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -361,6 +362,28 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     rush_y=sf(player.get("rush_yds"))/gp; rush_att=sf(player.get("rush_att"))/gp
     rec_y=sf(player.get("rec_yds"))/gp; recs=sf(player.get("receptions"))/gp
     pass_td=sf(player.get("pass_td"))/gp; ints=sf(player.get("pass_int"))/gp
+    # NFL-app style opening-week fallback: use independent team production baselines
+    # when the player has no current/prior personal sample. The prop line is NOT used
+    # to manufacture the projection.
+    used_team_prior=False
+    if pass_y<=0 and sf(team_ctx.get("team_pass_yds_pg"))>0:
+        pass_y=sf(team_ctx.get("team_pass_yds_pg"))*.92; used_team_prior=True
+    if pass_att<=0 and sf(team_ctx.get("team_pass_att_pg"))>0:
+        pass_att=sf(team_ctx.get("team_pass_att_pg"))*.92; used_team_prior=True
+    if comp<=0 and sf(team_ctx.get("team_pass_comp_pg"))>0:
+        comp=sf(team_ctx.get("team_pass_comp_pg"))*.92; used_team_prior=True
+    if pass_td<=0 and sf(team_ctx.get("team_pass_td_pg"))>0:
+        pass_td=sf(team_ctx.get("team_pass_td_pg"))*.88; used_team_prior=True
+    if rush_y<=0 and sf(team_ctx.get("team_rush_yds_pg"))>0:
+        rush_y=sf(team_ctx.get("team_rush_yds_pg"))*.34; used_team_prior=True
+    if rush_att<=0 and sf(team_ctx.get("team_rush_att_pg"))>0:
+        rush_att=sf(team_ctx.get("team_rush_att_pg"))*.30; used_team_prior=True
+    if rec_y<=0 and sf(team_ctx.get("team_pass_yds_pg"))>0:
+        rec_y=sf(team_ctx.get("team_pass_yds_pg"))*.23; used_team_prior=True
+    if recs<=0 and sf(team_ctx.get("team_pass_comp_pg"))>0:
+        recs=sf(team_ctx.get("team_pass_comp_pg"))*.19; used_team_prior=True
+    if used_team_prior:
+        notes.append("opening-week team production baseline")
     if market_label=="Passing Yards":
         base=pass_y; proj=base*pass_script*pace_adj*snap_adj*pass_match; sd=max(34,0.18*proj)
     elif market_label=="Pass Attempts":
@@ -600,6 +623,50 @@ pt_now=local_now()
 slate_scope=st.radio("Slate",["Today","Tomorrow","All Week"],horizontal=True,index=0,label_visibility="collapsed",key="cfb_slate_scope")
 target_date=scope_target_date(slate_scope,pt_now)
 display_games=filter_games_by_scope(week_games,slate_scope,pt_now)
+# SportsDataverse may lag the next calendar day even while Underdog has lines open.
+# Pull the exact ESPN date and project any missing games into the same board.
+if slate_scope in {"Today","Tomorrow"}:
+    raw_day=day_games(slate_scope,bundle.get("games",[]),pt_now)
+    have={(norm_name(g.get("away")),norm_name(g.get("home"))) for g in week_games}
+    for rg in raw_day:
+        away=rg.get("away_team") or rg.get("awayTeam"); home=rg.get("home_team") or rg.get("homeTeam")
+        key=(norm_name(away),norm_name(home))
+        if not away or not home or key in have:continue
+        market=market_map.get(key,{})
+        manual_gc=game_weather_context(away,home,game_context_df)
+        pg=project_game(away,home,ctx,market,neutral=bool(rg.get("neutral_site") or rg.get("neutralSite") or manual_gc.get("neutral",False)))
+        pg["weather"]={"wind_mph":sf(manual_gc.get("wind_mph")),"precip_prob":sf(manual_gc.get("precip_prob")),"temp_f":sf(manual_gc.get("temp_f"),70)}
+        pg["game_id"]=rg.get("id");pg["start_date"]=rg.get("start_date") or rg.get("startDate")
+        pg["away_abbreviation"]=rg.get("away_abbreviation") or "";pg["home_abbreviation"]=rg.get("home_abbreviation") or ""
+        pg["away_espn_id"]=rg.get("away_espn_id") or "";pg["home_espn_id"]=rg.get("home_espn_id") or ""
+        pg["away_logo"]=rg.get("away_logo") or "";pg["home_logo"]=rg.get("home_logo") or ""
+        week_games.append(pg);have.add(key)
+    week_games=annotate_games(week_games)
+    display_games=filter_games_by_scope(week_games,slate_scope,pt_now)
+# Final NFL-style fallback: if the official/free schedule is behind but the live book
+# has tomorrow's CFB board open, build the event slate from those live event records.
+if slate_scope in {"Today","Tomorrow"} and not display_games:
+    try:
+        boot_rows,boot_debug=fetch_underdog_cfb_props(force=force)
+        st.session_state["ud_cfb_rows"]=boot_rows
+        st.session_state["ud_cfb_debug"]=boot_debug
+        scoped_boot=filter_props_by_scope(boot_rows,slate_scope,pt_now)
+        raw_prop_games=games_from_props(scoped_boot,ctx)
+        for rg in raw_prop_games:
+            away=rg.get("away_team");home=rg.get("home_team")
+            if not away or not home:continue
+            key=(norm_name(away),norm_name(home));market=market_map.get(key,{})
+            manual_gc=game_weather_context(away,home,game_context_df)
+            pg=project_game(away,home,ctx,market,neutral=bool(manual_gc.get("neutral",False)))
+            pg["weather"]={"wind_mph":sf(manual_gc.get("wind_mph")),"precip_prob":sf(manual_gc.get("precip_prob")),"temp_f":sf(manual_gc.get("temp_f"),70)}
+            pg["game_id"]=rg.get("id");pg["start_date"]=rg.get("start_date")
+            for k in ["away_abbreviation","home_abbreviation","away_espn_id","home_espn_id","away_logo","home_logo"]:pg[k]=rg.get(k) or ""
+            week_games.append(pg)
+        week_games=annotate_games(week_games)
+        display_games=filter_games_by_scope(week_games,slate_scope,pt_now)
+    except Exception as e:
+        bundle.setdefault("errors",{})["live_slate_bootstrap"]=str(e)
+ctx=ensure_branding(ctx,week_games,players)
 slate_label=(target_date.strftime("%A, %B %-d") if target_date else f"Week {active_week}")
 st.markdown(f"<div class='cfb-live-strip'><b>{slate_scope}</b> · {slate_label} · {len(display_games)} games · {pt_now.strftime('%-I:%M %p PT')}</div>",unsafe_allow_html=True)
 
@@ -645,6 +712,7 @@ with TAB_PLAYERS:
                 st.session_state["ud_cfb_debug"]=ud_debug
             ud_rows=st.session_state.get("ud_cfb_rows",[])
             ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
+            ctx=ensure_branding(ctx,week_games,players,ud_rows)
             prop_rows=list(ud_rows) if selected_game is None else props_for_game(ud_rows,selected_game["away"],selected_game["home"])
             # Some Underdog CFB rows carry a school abbreviation while the free
             # schedule uses the full school name. Player lookup below canonicalizes
@@ -713,17 +781,8 @@ with TAB_PLAYERS:
                     away=r.get("away") or "Away"; home=r.get("home") or "Home"
                     row_game=project_game(away,home,ctx,{},neutral=True)
                     row_game["weather"]={}
-            # Infer team from player bank if bookmaker omitted it.
-            team=r.get("team") or pr.get("team")
-            if team not in {row_game["away"],row_game["home"]}:
-                # Prefer the model player-bank school when Underdog uses an abbreviation.
-                pr_team=pr.get("team")
-                if pr_team in {row_game["away"],row_game["home"]}:
-                    team=pr_team
-                else:
-                    for t in [row_game["away"],row_game["home"]]:
-                        if norm_name(team)==norm_name(t) or norm_name(team) in norm_name(t) or norm_name(t) in norm_name(team):
-                            team=t; break
+            # Resolve Underdog abbreviations to the full school used by the model/game board.
+            team=canonical_prop_team(r,row_game,pr)
             opp=row_game["home"] if team==row_game["away"] else row_game["away"]
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
             proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,row_game,team or "")
@@ -740,7 +799,7 @@ with TAB_PLAYERS:
             p=prop_probability(proj,r.get("line"),sd,side)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status="PLAYABLE" if p>=.60 and proj>0 else "LEAN" if p>=.56 and proj>0 else "TRACK"
-            q={**r,"_game":row_game,"team":team,"opp":opp,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
+            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
             projected.append(q)
         pdf=pd.DataFrame(projected)
         show=["player","team","prop","side","line","projection","edge","probability","status","notes"]

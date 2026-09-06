@@ -167,6 +167,26 @@ def day_games(scope:str, week_games:List[dict], now=None)->List[dict]:
     return list(merged.values())
 
 
+def games_from_props(rows:List[dict],ctx:Dict[str,dict])->List[dict]:
+    out={}
+    def resolve(code):
+        code=str(code or '')
+        d=ctx.get(code,{}) or {}
+        return str(d.get('canonical_name') or d.get('display_name') or code),d
+    for r in rows or []:
+        away=str(r.get('away') or '').strip();home=str(r.get('home') or '').strip()
+        if not away or not home:
+            m=str(r.get('matchup') or '')
+            parts=re.split(r'\s+@\s+',m,maxsplit=1)
+            if len(parts)==2:away=away or parts[0].strip();home=home or parts[1].strip()
+        if not away or not home:continue
+        an,ad=resolve(away);hn,hd=resolve(home)
+        dt=r.get('scheduled_at') or r.get('start_date')
+        key=(_norm(an),_norm(hn),str(dt or ''))
+        out[key]={'id':str(r.get('event_id') or ''),'week':None,'away_team':an,'home_team':hn,'away_abbreviation':away,'home_abbreviation':home,'away_espn_id':str(ad.get('espn_id') or ''),'home_espn_id':str(hd.get('espn_id') or ''),'away_logo':ad.get('logo') or '','home_logo':hd.get('logo') or '','start_date':dt,'scheduled_at':dt,'neutral_site':False,'source':'Underdog live slate'}
+    return list(out.values())
+
+
 def _branding_from_games(games:Iterable[dict])->Dict[str,dict]:
     out={}
     for g in games or []:

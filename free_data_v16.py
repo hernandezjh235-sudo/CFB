@@ -70,6 +70,7 @@ def load_free_stack(year:int, week:int):
     team_box=grab('team_box','team_box')
     prev_player_box=grab('player_box','player_box',int(year)-1)
     prev_team_box=grab('team_box','team_box',int(year)-1)
+    prev_schedule=grab('schedules','cfb_schedule',int(year)-1)
 
     resolved_week=int(week)
     wc=base._col(schedule,'week','season_week') if schedule is not None else None
@@ -106,6 +107,32 @@ def load_free_stack(year:int, week:int):
     prior_players=base._players(prev_player_box,99)
     players=_merge_player_banks(current_players,prior_players)
     ctx=base._team_context(schedule,adv,pidx,resolved_week)
+
+    # Build NFL-style canonical team aliases from current + prior schedules. The
+    # previous season is useful before the next-day schedule file catches up, and
+    # gives stable ESPN IDs for logos without any paid API.
+    alias_schedules=[x for x in [schedule,prev_schedule] if x is not None and not x.empty]
+    for sched in alias_schedules:
+        hname=base._col(sched,'home_team','home_display_name','home_team_name','home_name')
+        aname=base._col(sched,'away_team','away_display_name','away_team_name','away_name')
+        habbr=base._col(sched,'home_abbreviation','home_abbr','home_team_abbreviation')
+        aabbr=base._col(sched,'away_abbreviation','away_abbr','away_team_abbreviation')
+        hid=base._col(sched,'home_team_id','home_id','home_espn_id')
+        aid=base._col(sched,'away_team_id','away_id','away_espn_id')
+        for _,rr in sched.iterrows():
+            for nc,ac,ic in [(hname,habbr,hid),(aname,aabbr,aid)]:
+                name=str(rr.get(nc) or '').strip() if nc else ''
+                abbr=str(rr.get(ac) or '').strip() if ac else ''
+                eid=str(rr.get(ic) or '').strip() if ic else ''
+                if not name:continue
+                d=ctx.setdefault(name,{'sp':0,'srs':0,'core':0,'elo':1500,'talent':0,'off_rating':0,'def_rating':0,'pace':0,'off_expl':0,'def_expl':0,'def_passing':0,'def_rushing':0,'havoc':0})
+                d['canonical_name']=name
+                if abbr:d['abbreviation']=abbr
+                if eid and eid.lower()!='nan':
+                    d['espn_id']=eid
+                    d['logo']=d.get('logo') or f'https://a.espncdn.com/i/teamlogos/ncaa/500/{eid}.png'
+                if abbr:
+                    alias=dict(d);alias['canonical_name']=name;ctx[abbr]=alias
 
     cur_team=_team_baselines(team_box,resolved_week)
     prev_team=_team_baselines(prev_team_box,None)
