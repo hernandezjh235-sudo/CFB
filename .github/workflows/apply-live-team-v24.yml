@@ -1,0 +1,79 @@
+name: Apply CFB Live Team v2.4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_live_team_v24.py'
+      - '.github/workflows/apply-live-team-v24.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.4 patch
+        run: python scripts/upgrade_live_team_v24.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live team + logo + line validation
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage
+          import re
+          def norm(x): return re.sub(r'[^a-z0-9]','',str(x or '').lower())
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True)
+          pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx)
+          ctx=ensure_branding(ctx,games,players,pday)
+          expected={
+            'Lincoln Kienholz':'Louisville Cardinals',
+            'Caden Pinnick':'Washington State Cougars',
+            'CJ Carr':'Notre Dame Fighting Irish',
+            'Colton Joseph':'Wisconsin Badgers',
+            'Trinidad Chambliss':'Ole Miss Rebels',
+            'Demond Williams':'Washington Huskies'
+          }
+          audit={}
+          for n,want in expected.items():
+              rows=[r for r in pday if norm(r.get('player'))==norm(n)]
+              assert rows, f'no live row for {n}'
+              teams=sorted(set(str(r.get('team') or '') for r in rows))
+              audit[n]=teams
+              assert any(norm(want)==norm(t) for t in teams), f'{n}: expected {want}, got {teams}'
+          # Every live row from these three games should resolve to one of the two schools in its game.
+          bad=[]
+          for r in pday:
+              if not r.get('away') or not r.get('home'): continue
+              if norm(r.get('team')) not in {norm(r.get('away')),norm(r.get('home'))}: bad.append((r.get('player'),r.get('team'),r.get('matchup')))
+          print({'live_props':len(props),'next_day_props':len(pday),'games':len(games),'logos':logo_coverage(ctx,games),'player_team_audit':audit,'bad_live_team_rows':bad[:10]})
+          assert len(props)>0 and len(pday)>0 and len(games)>0
+          assert logo_coverage(ctx,games)['coverage']>=.90
+          assert not bad, f'unresolved live team rows: {bad[:10]}'
+          PY
+      - name: Static UI checks
+        run: |
+          grep -q 'cfb18-side-over' cfb_nfl_ui_v18.py
+          grep -q 'cfb18-side-under' cfb_nfl_ui_v18.py
+          grep -q 'cfb18-logo-wrap' cfb_nfl_ui_v18.py
+          grep -q "model_pr\['current_team'\]=team" app.py
+      - name: Commit v2.4 runtime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py underdog_cfb_v15.py
+          git commit -m 'Apply CFB v2.4 live team logos and opportunity lock [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
