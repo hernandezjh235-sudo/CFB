@@ -1,0 +1,69 @@
+name: Apply CFB Roster Dataset v2.3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_roster_dataset_v23.py'
+      - '.github/workflows/apply-roster-dataset-v23.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.3 patch
+        run: python scripts/upgrade_roster_dataset_v23.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Current roster + live slate validation
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage
+          import re
+          def norm(x): return re.sub(r'[^a-z0-9]','',str(x or '').lower())
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True)
+          pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx)
+          ctx=ensure_branding(ctx,games,players,pday)
+          h=logo_coverage(ctx,games)
+          expected={
+            'Lincoln Kienholz':'Louisville',
+            'Caden Pinnick':'Washington State',
+            'CJ Carr':'Notre Dame',
+            'Colton Joseph':'Wisconsin',
+            'Trinidad Chambliss':'Ole Miss',
+            'Demond Williams':'Washington'
+          }
+          result={}
+          for name,want in expected.items():
+              hit=players[players.player.astype(str).str.lower()==name.lower()] if not players.empty else players
+              cur=str(hit.iloc[0].get('current_team') or '') if len(hit) else ''
+              hist=str(hit.iloc[0].get('team') or '') if len(hit) else ''
+              result[name]={'rows':len(hit),'current_team':cur,'history_team':hist}
+              assert len(hit)>0, f'no player row for {name}'
+              assert norm(want) in norm(cur) or norm(cur) in norm(want), f'{name}: expected current {want}, got {cur}'
+          print({'free_health':bundle.get('free_health'),'live_props':len(props),'next_day_props':len(pday),'games':len(games),'logos':h,'players':len(players),'roster_checks':result})
+          assert bundle.get('free_health',{}).get('rosters',0)>0, 'current roster dataset missing'
+          assert len(props)>0 and len(pday)>0 and len(games)>0
+          assert h['coverage']>=.90
+          PY
+      - name: Commit roster-dataset runtime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py free_data_v16.py
+          git commit -m 'Apply CFB v2.3 current roster dataset opportunity mapping [skip ci]' || exit 0
+          git push
