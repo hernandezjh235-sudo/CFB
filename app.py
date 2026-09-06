@@ -12,8 +12,9 @@ import requests
 import streamlit as st
 from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
+from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_moneyline_nfl, render_player_nfl, render_fast_rows
 
-APP_VERSION = "CFB Prop Engine v1.7 — NFL-STYLE LIVE PLAYER BOARD"
+APP_VERSION = "CFB Prop Engine v1.8 — NFL-STYLE MONEYLINE + FAST ROWS"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -563,6 +564,8 @@ with st.spinner("Loading FREE CFB data…"):
     else:
         bundle,ctx,players,market_map=load_free_stack(int(year),int(week))
         data_mode="FREE SportsDataverse/NCAA"
+ctx=hydrate_team_branding(ctx)
+inject_nfl_cfb_css()
 active_week=int(bundle.get("resolved_week",week)) if isinstance(bundle,dict) else int(week)
 if active_week!=int(week):
     st.sidebar.info(f"Live source currently labels this slate as Week {active_week}; using that automatically.")
@@ -598,7 +601,7 @@ with TAB_EVENTS:
     if not week_games: st.info("No games loaded for this week yet. Try Refresh or a different week.")
     else:
         for g in sorted(week_games,key=lambda x:x.get("start_date") or ""):
-            render_game_card(g)
+            render_moneyline_nfl(g,ctx)
 
 with TAB_RANK:
     st.subheader("AP Rank vs Model Rank")
@@ -735,9 +738,13 @@ with TAB_PLAYERS:
             render_rows=(good_ranked or ranked)[:30]
             if len(ranked)>30:
                 st.caption(f"Showing the top {len(render_rows)} model cards for speed · all {len(ranked)} rows remain in the compact table below.")
-            cols=st.columns(2)
-            for i,rr in enumerate(render_rows):
-                with cols[i%2]: render_player_card(rr,ctx,rr.get("_game") or row_game)
+            FAST_TAB,CARD_TAB=st.tabs(["⚡ Fast Row","🪪 Player Cards"])
+            with FAST_TAB:
+                render_fast_rows(render_rows,ctx,limit=60)
+            with CARD_TAB:
+                cols=st.columns(2)
+                for i,rr in enumerate(render_rows):
+                    with cols[i%2]: render_player_nfl(rr,ctx,rr.get("_game") or row_game,rank=i+1)
             with st.expander("📋 Compact projection table",expanded=False):
                 pdf["probability"]=(pdf["probability"]*100).round(1)
                 for c in ["line","projection","edge"]: pdf[c]=pd.to_numeric(pdf[c],errors="coerce").round(2)
