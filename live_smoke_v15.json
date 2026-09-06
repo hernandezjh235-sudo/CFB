@@ -1,102 +1,11 @@
 {
-  "schedule_schema": {
-    "columns": [
-      "game_id",
-      "season",
-      "week",
-      "season_type",
-      "game_date",
-      "neutral_site",
-      "conference_competition",
-      "home_id",
-      "away_id",
-      "home_team",
-      "away_team",
-      "home_abbreviation",
-      "away_abbreviation",
-      "home_score",
-      "away_score",
-      "home_winner",
-      "away_winner",
-      "venue",
-      "attendance",
-      "status"
-    ],
-    "week_column": "week",
-    "week_values": [
+  "free": {
+    "requested_week": 2,
+    "resolved_week": 1,
+    "available_weeks": [
       1
     ],
-    "head": [
-      {
-        "game_id": "401858209",
-        "season": "2026",
-        "week": "1",
-        "season_type": "2",
-        "game_date": "2026-09-05T19:30Z",
-        "neutral_site": "False",
-        "conference_competition": "False",
-        "home_id": "150",
-        "away_id": "2655",
-        "home_team": "Duke Blue Devils",
-        "away_team": "Tulane Green Wave",
-        "home_abbreviation": "DUKE",
-        "away_abbreviation": "TULN",
-        "home_score": "0",
-        "away_score": "0",
-        "home_winner": "False",
-        "away_winner": "False",
-        "venue": "Wallace Wade Stadium",
-        "attendance": NaN,
-        "status": "STATUS_DELAYED"
-      },
-      {
-        "game_id": "401862694",
-        "season": "2026",
-        "week": "1",
-        "season_type": "2",
-        "game_date": "2026-09-05T19:30Z",
-        "neutral_site": "False",
-        "conference_competition": "False",
-        "home_id": "2429",
-        "away_id": "2643",
-        "home_team": "Charlotte 49ers",
-        "away_team": "The Citadel Bulldogs",
-        "home_abbreviation": "CLT",
-        "away_abbreviation": "CIT",
-        "home_score": "0",
-        "away_score": "0",
-        "home_winner": "False",
-        "away_winner": "False",
-        "venue": "Jerry Richardson Stadium",
-        "attendance": NaN,
-        "status": "STATUS_DELAYED"
-      },
-      {
-        "game_id": "401856635",
-        "season": "2026",
-        "week": "1",
-        "season_type": "2",
-        "game_date": "2026-09-05T20:15Z",
-        "neutral_site": "False",
-        "conference_competition": "False",
-        "home_id": "8",
-        "away_id": "2453",
-        "home_team": "Arkansas Razorbacks",
-        "away_team": "North Alabama Lions",
-        "home_abbreviation": "ARK",
-        "away_abbreviation": "UNA",
-        "home_score": "31",
-        "away_score": "14",
-        "home_winner": "True",
-        "away_winner": "False",
-        "venue": "Donald W. Reynolds Razorback Stadium",
-        "attendance": "69178.0",
-        "status": "STATUS_FINAL"
-      }
-    ]
-  },
-  "free": {
-    "games": 0,
+    "games": 85,
     "players": 4747,
     "teams": 401,
     "markets": 0,
@@ -105,13 +14,97 @@
       "player_box": 5775,
       "adv_team": 166,
       "power_index": 1776,
-      "betting": 85,
-      "espn_schedule": 0
+      "betting": 85
     },
-    "errors": {}
+    "errors": {},
+    "game_sample": [
+      {
+        "id": "401858209",
+        "week": 1,
+        "home_team": "Duke Blue Devils",
+        "away_team": "Tulane Green Wave",
+        "home_points": 0.0,
+        "away_points": 0.0,
+        "start_date": "2026-09-05T19:30Z",
+        "neutral_site": false,
+        "home_abbreviation": "DUKE",
+        "away_abbreviation": "TULN"
+      },
+      {
+        "id": "401862694",
+        "week": 1,
+        "home_team": "Charlotte 49ers",
+        "away_team": "The Citadel Bulldogs",
+        "home_points": 0.0,
+        "away_points": 0.0,
+        "start_date": "2026-09-05T19:30Z",
+        "neutral_site": false,
+        "home_abbreviation": "CLT",
+        "away_abbreviation": "CIT"
+      },
+      {
+        "id": "401856635",
+        "week": 1,
+        "home_team": "Arkansas Razorbacks",
+        "away_team": "North Alabama Lions",
+        "home_points": 31.0,
+        "away_points": 14.0,
+        "start_date": "2026-09-05T20:15Z",
+        "neutral_site": false,
+        "home_abbreviation": "ARK",
+        "away_abbreviation": "UNA"
+      },
+      {
+        "id": "401868356",
+        "week": 1,
+        "home_team": "Southern Miss Golden Eagles",
+        "away_team": "Alcorn State Braves",
+        "home_points": 49.0,
+        "away_points": 3.0,
+        "start_date": "2026-09-05T21:00Z",
+        "neutral_site": false,
+        "home_abbreviation": "USM",
+        "away_abbreviation": "ALCN"
+      },
+      {
+        "id": "401860878",
+        "week": 1,
+        "home_team": "Colorado State Rams",
+        "away_team": "Wyoming Cowboys",
+        "home_points": 14.0,
+        "away_points": 13.0,
+        "start_date": "2026-09-05T22:00Z",
+        "neutral_site": false,
+        "home_abbreviation": "CSU",
+        "away_abbreviation": "WYO"
+      }
+    ]
   },
   "underdog": {
     "rows": 299,
+    "prop_counts": {
+      "Rush + Rec TDs": 59,
+      "Interceptions": 37,
+      "Receiving Yards": 37,
+      "Rushing Yards": 34,
+      "Longest Reception": 26,
+      "Receptions": 24,
+      "Longest Rush": 15,
+      "Rush Attempts": 13,
+      "Passing TDs": 11,
+      "Passing Yards": 10,
+      "Pass Attempts": 7,
+      "Total TDs": 7,
+      "Longest Completion": 7,
+      "Completions": 6,
+      "Field Goals Made": 6
+    },
+    "game_counts": {
+      "SMU @ FSU": 89,
+      "LOU @ MISS": 81,
+      "WSU @ WASH": 72,
+      "WIS @ ND": 57
+    },
     "debug": [
       {
         "url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=ncaaf",
@@ -221,6 +214,54 @@
         "underdog_id": "5f5cef3c-d89e-43c2-aa5c-0379a3d1fba5",
         "line_status": "active",
         "scheduled_at": "2026-09-07T23:30:00Z"
+      },
+      {
+        "player": "Caden Pinnick",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "WSU",
+        "home": "WASH",
+        "matchup": "WSU @ WASH",
+        "event_id": "182954",
+        "underdog_id": "c5aecc42-e9e0-47b4-9f50-f381096efed4",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T20:00:00Z"
+      },
+      {
+        "player": "Lincoln Kienholz",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "LOU",
+        "home": "MISS",
+        "matchup": "LOU @ MISS",
+        "event_id": "173006",
+        "underdog_id": "bf23a822-fa40-4460-bec6-699f278ca51c",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T23:30:00Z"
+      },
+      {
+        "player": "Trinidad Chambliss",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "LOU",
+        "home": "MISS",
+        "matchup": "LOU @ MISS",
+        "event_id": "173006",
+        "underdog_id": "64ed7fb6-9b5c-4f58-b9b9-bf3a6107c4bc",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T23:30:00Z"
       }
     ]
   }
