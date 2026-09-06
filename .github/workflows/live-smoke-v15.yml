@@ -1,0 +1,31 @@
+name: CFB Live Data Smoke v1.5
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/live_smoke_v15.py'
+      - '.github/workflows/live-smoke-v15.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Run live smoke test
+        run: python scripts/live_smoke_v15.py
+      - name: Commit smoke result
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add live_smoke_v15.json
+          git commit -m 'Update CFB live smoke diagnostics [skip ci]' || exit 0
+          git push
