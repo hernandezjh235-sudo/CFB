@@ -1,0 +1,58 @@
+name: Apply CFB Roster v2.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_roster_v22.py'
+      - '.github/workflows/apply-roster-v22.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.2 patch
+        run: python scripts/upgrade_roster_v22.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Current roster transfer validation
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, current_roster_team
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True)
+          pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx)
+          ctx=ensure_branding(ctx,games,players,pday)
+          expected={'Lincoln Kienholz':'Louisville Cardinals','Caden Pinnick':'Washington State Cougars','CJ Carr':'Notre Dame Fighting Irish','Colton Joseph':'Wisconsin Badgers','Trinidad Chambliss':'Ole Miss Rebels','Demond Williams':'Washington Huskies'}
+          got={}
+          for n,team in expected.items():
+              hit=''
+              for g in games:
+                  t=current_roster_team(n,g)
+                  if t: hit=t; break
+              got[n]=hit
+          print({'games':len(games),'props':len(pday),'current_rosters':got})
+          assert len(games)>0 and len(pday)>0
+          for n,team in expected.items():
+              assert got.get(n)==team, f'{n}: expected {team}, got {got.get(n)}'
+          PY
+      - name: Commit roster-aware runtime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_runtime_v20.py
+          git commit -m 'Apply CFB v2.2 current roster opportunity mapping [skip ci]' || exit 0
+          git push
