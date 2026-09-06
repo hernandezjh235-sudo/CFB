@@ -1,0 +1,33 @@
+name: Probe Underdog CFB team metadata
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-underdog-team.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests
+      - name: Inspect Underdog player team metadata
+        run: |
+          python - <<'PY'
+          import requests,re,json
+          u='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
+          h={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)','Accept':'application/json,text/plain,*/*','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
+          j=requests.get(u,headers=h,timeout=20).json()
+          print('TOP_KEYS',list(j.keys()))
+          teams={str(x.get('id')):x for x in j.get('teams',[]) if isinstance(x,dict)}
+          players={str(x.get('id')):x for x in j.get('players',[]) if isinstance(x,dict)}
+          apps={str(x.get('id')):x for x in j.get('appearances',[]) if isinstance(x,dict)}
+          print('TEAM_SAMPLE',list(teams.values())[:4])
+          wanted=['lincoln kienholz','caden pinnick','cj carr','colton joseph','trinidad chambliss','demond williams']
+          for pid,p in players.items():
+              name=str(p.get('display_name') or p.get('full_name') or p.get('name') or '').lower()
+              if any(w in name or name in w for w in wanted):
+                  aa=[a for a in apps.values() if str(a.get('player_id'))==pid]
+                  tids=set(str(a.get('team_id')) for a in aa if a.get('team_id') is not None)
+                  if p.get('team_id') is not None:tids.add(str(p.get('team_id')))
+                  print('PLAYER',p,'APPS',aa[:3],'TEAM_OBJS',[teams.get(t) for t in tids])
+          PY
