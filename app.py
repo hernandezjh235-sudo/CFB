@@ -15,6 +15,7 @@ from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_moneyline_nfl, render_player_nfl, render_fast_rows
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
+from cfb_opportunity_v25 import enrich_opportunity, automatic_weather
 
 APP_VERSION = "CFB Prop Engine v2.4.1 — NFL-STYLE LIVE TEAM + COMPLETE OPPORTUNITY"
 BASE = Path(__file__).resolve().parent
@@ -282,11 +283,19 @@ def project_game(away:str,home:str,ctx:dict,market:dict|None=None,neutral=False)
         model_margin=.88*model_margin+.12*market_margin
     home_wp=logistic(model_margin/6.4)
 
-    # Total uses offense-v-defense + pace + explosiveness. Baseline 55 is close to modern FBS scoring environment and is recalibrated by grading.
+    # v2.5 total: offense/defense remains the stable prior, while actual possessions,
+    # drive success, third-down sustain, turnovers and explosives determine opportunity.
     h_off=sf(h.get("off_rating")); a_off=sf(a.get("off_rating")); h_def=sf(h.get("def_rating")); a_def=sf(a.get("def_rating"))
     pace=(sf(h.get("pace"))+sf(a.get("pace")))/2
     expl=(sf(h.get("off_expl"))+sf(a.get("off_expl"))-sf(h.get("def_expl"))-sf(a.get("def_expl")))/4
-    total=55.0 + .28*(h_off+a_off) - .20*(h_def+a_def) + .10*pace + .08*expl
+    drive_pg=np.mean([x for x in [sf(h.get('drives_pg')),sf(a.get('drives_pg'))] if x>0]) if any(sf(x.get('drives_pg'))>0 for x in [h,a]) else 11.5
+    score_rate=np.mean([x for x in [sf(h.get('score_drive_rate')),sf(a.get('score_drive_rate'))] if x>0]) if any(sf(x.get('score_drive_rate'))>0 for x in [h,a]) else .34
+    td_rate=np.mean([x for x in [sf(h.get('td_drive_rate')),sf(a.get('td_drive_rate'))] if x>0]) if any(sf(x.get('td_drive_rate'))>0 for x in [h,a]) else .24
+    sustain=np.mean([sf(h.get('third_down_rate')),sf(a.get('third_down_rate')),sf(h.get('third_down_success_rate')),sf(a.get('third_down_success_rate'))])
+    turnovers=sf(h.get('turnovers_pg'))+sf(a.get('turnovers_pg'))
+    ypp=np.mean([x for x in [sf(h.get('yards_per_play')),sf(a.get('yards_per_play'))] if x>0]) if any(sf(x.get('yards_per_play'))>0 for x in [h,a]) else 5.7
+    drive_signal=clamp((drive_pg-11.5)*1.0 + (score_rate-.34)*24 + (td_rate-.24)*18 + (sustain-.40)*8 - max(turnovers-2.2,0)*.8 + (ypp-5.7)*1.2,-8,9)
+    total=55.0 + .25*(h_off+a_off) - .18*(h_def+a_def) + .08*pace + .07*expl + drive_signal
     total=clamp(total,34,86)
     if market.get("market_total") is not None: total=.90*total+.10*sf(market["market_total"])
     home_pts=(total+model_margin)/2; away_pts=(total-model_margin)/2
@@ -352,6 +361,14 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
         notes.append("blowout playing-time tax")
     elif not is_fav and blow>.60:
         notes.append("underdog catch-up volume")
+    # CFB starters get pulled much earlier than NFL starters. Use actual QB1 share and
+    # current roster starter status to make the hook tax role-aware.
+    qb1_share=clamp(sf(team_ctx.get('qb1_attempt_share')),0,1)
+    starter_current=bool(player.get('starter_current'))
+    if is_fav and blow>.52 and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Receiving Yards","Receptions","Pass + Rush Yards"}:
+        hook=(blow-.52)*(.32 if qb1_share<.86 else .24)
+        snap_adj*=clamp(1-hook,.76,1.0); notes.append("CFB starter hook/share adjustment")
+    if starter_current: notes.append("current starter confirmed")
     pass_def=sf(opp_ctx.get("def_passing")); rush_def=sf(opp_ctx.get("def_rushing")); expl_def=sf(opp_ctx.get("def_expl")); havoc=sf(opp_ctx.get("havoc"))
     pass_match=clamp(1.0 + (-pass_def)*.018 + (-expl_def)*.007 - havoc*.004, .78,1.23)
     rush_match=clamp(1.0 + (-rush_def)*.020 - havoc*.003, .78,1.24)
@@ -365,6 +382,11 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     adv_att=sf(player.get('adv_pass_att')); adv_ypa=sf(player.get('adv_ypa')); adv_cpoe=sf(player.get('adv_cpoe')); adv_pass_epa=sf(player.get('adv_pass_epa'))
     adv_car=sf(player.get('adv_rush_car')); adv_ypc=sf(player.get('adv_ypc')); adv_rush_epa=sf(player.get('adv_rush_epa')); carry_share=clamp(sf(player.get('adv_carry_share')),0,.92)
     adv_tar=sf(player.get('adv_targets')); adv_catch=sf(player.get('adv_catch_rate')); adv_ypt=sf(player.get('adv_ypt')); adv_rec_epa=sf(player.get('adv_rec_epa')); target_share=clamp(sf(player.get('adv_target_share')),0,.58)
+    air_share=clamp(sf(player.get('air_yard_share')),0,.80); qb_rush_share=clamp(sf(player.get('qb_rush_share')),0,.65); sack_rate=clamp(sf(player.get('sack_rate')),0,.30)
+    drives=sf(team_ctx.get('drives_pg'),11.5); plays_drive=sf(team_ctx.get('plays_per_drive'),5.7); score_drive=sf(team_ctx.get('score_drive_rate'),.34); rz=sf(team_ctx.get('red_zone_success_rate'),.55)
+    early_pass=sf(team_ctx.get('early_down_pass_rate')); early_rush=sf(team_ctx.get('early_down_rush_rate')); start_field=sf(team_ctx.get('avg_start_yard_line'),50)
+    volume_drive=clamp(1+(drives-11.5)*.018+(plays_drive-5.7)*.015,.90,1.12)
+    scoring_env=clamp(1+(score_drive-.34)*.18+(rz-.55)*.10+(start_field-50)*.002,.90,1.12)
     sample_source=str(player.get("sample_source") or "current").lower()
     # Opening-week opportunity correction: an active QB/skill prop indicates the
     # player has a meaningful current role, while an old tiny backup sample may not.
@@ -414,9 +436,11 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
             exp_att=team_att*qb_share*pass_script*pace_adj*snap_adj
             team_ypa=team_pass/max(team_att,1) if team_att>0 else 7.0
             ypa=.58*adv_ypa+.42*team_ypa
+            pressure_tax=clamp(1-sack_rate*.30-max(sf(opp_ctx.get('havoc')),0)*.004,.88,1.03)
+            pass_tendency=clamp(1+(early_pass-.50)*.10,.94,1.06) if early_pass>0 else 1.0
             eff=clamp(1+adv_cpoe*.20+adv_pass_epa*.07,.92,1.09)
-            proj=exp_att*ypa*eff*pass_match
-            notes.append("attempt share × YPA advanced opportunity")
+            proj=exp_att*ypa*eff*pass_match*pressure_tax*volume_drive*pass_tendency
+            notes.append("attempt share × YPA + drive/pressure opportunity")
         else:
             base=pass_y; proj=base*pass_script*pace_adj*snap_adj*pass_match
         sd=max(34,0.20*proj)
@@ -432,9 +456,12 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
         team_rush_att=sf(team_ctx.get('team_rush_att_pg'))
         if carry_share>0 and adv_ypc>0 and team_rush_att>0:
             exp_car=team_rush_att*carry_share*rush_script*pace_adj*snap_adj
+            rush_tendency=clamp(1+(early_rush-.50)*.10,.94,1.07) if early_rush>0 else 1.0
             eff=clamp(1+adv_rush_epa*.08,.92,1.08)
-            proj=exp_car*adv_ypc*eff*rush_match
-            notes.append("carry share × YPC advanced opportunity")
+            proj=exp_car*adv_ypc*eff*rush_match*volume_drive*rush_tendency
+            # Dual-threat QBs require a separate scramble/designed-run opportunity bump.
+            if adv_att>0 and qb_rush_share>0: proj*=clamp(1+qb_rush_share*.10,1.0,1.06); notes.append("QB rushing role separated from RB workload")
+            notes.append("carry share × YPC + drive opportunity")
         else: proj=rush_y*rush_script*pace_adj*snap_adj*rush_match
         sd=max(18,.34*proj)
     elif market_label=="Rush Attempts":
@@ -442,9 +469,11 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     elif market_label=="Receiving Yards":
         if target_share>0 and adv_ypt>0 and team_att>0:
             exp_targets=team_att*target_share*pass_script*pace_adj*snap_adj
+            air_eff=clamp(1+(air_share-.25)*.10,.95,1.06) if air_share>0 else 1.0
+            pressure_tax=clamp(1-sack_rate*.12,.95,1.0)
             eff=clamp(1+adv_rec_epa*.06,.92,1.08)
-            proj=exp_targets*adv_ypt*eff*pass_match
-            notes.append("target share × YPT advanced opportunity")
+            proj=exp_targets*adv_ypt*eff*pass_match*air_eff*pressure_tax*volume_drive
+            notes.append("target share × YPT + air-yard/drive opportunity")
         else: proj=rec_y*pass_script*pace_adj*snap_adj*pass_match
         sd=max(16,.36*proj)
     elif market_label=="Receptions":
@@ -460,9 +489,9 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     elif market_label=="Rush + Rec Yards":
         proj=(rush_y*rush_script*rush_match + rec_y*pass_script*pass_match)*pace_adj*snap_adj; sd=max(20,.29*proj)
     elif market_label=="Rush + Rec TDs":
-        proj=max(.02,(sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj); sd=max(.65,math.sqrt(proj))
+        proj=max(.02,(sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj*scoring_env); sd=max(.65,math.sqrt(proj))
     elif market_label=="Total TDs":
-        proj=max(.02,(sf(player.get("pass_td"))+sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj); sd=max(.7,math.sqrt(proj))
+        proj=max(.02,(sf(player.get("pass_td"))+sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj*scoring_env); sd=max(.7,math.sqrt(proj))
     else:
         proj=0; sd=1
     if proj<=0: notes.append("insufficient player sample")
@@ -639,6 +668,11 @@ with st.spinner("Loading FREE CFB data…"):
     else:
         bundle,ctx,players,market_map=load_free_stack(int(year),int(week))
         data_mode="FREE SportsDataverse/NCAA"
+    # v2.5: enrich both free and optional-CFBD modes with the same no-key CFB
+    # drive/opportunity context. This layer never uses the sportsbook line to set a projection.
+    ctx,players,opportunity_health=enrich_opportunity(int(year),int(bundle.get("resolved_week",week) if isinstance(bundle,dict) else week),ctx,players)
+    if isinstance(bundle,dict):
+        bundle.setdefault("free_health",{}).update({f"v25_{k}":v for k,v in opportunity_health.items()})
 ctx=hydrate_team_branding(ctx)
 ctx=ensure_branding(ctx,bundle.get("games",[]),players)
 inject_nfl_cfb_css()
@@ -663,7 +697,8 @@ for g in bundle.get("games",[]):
         pg["model_total"]-=2.0; pg["home_points"]-=1.0; pg["away_points"]-=1.0; pg["tags"].append("🌬️ HIGH WIND")
     if precip>=65:
         pg["model_total"]-=1.0; pg["home_points"]-=.5; pg["away_points"]-=.5; pg["tags"].append("🌧️ WEATHER RISK")
-    pg["weather"]={"wind_mph":wind,"precip_prob":precip,"temp_f":temp}
+    auto_w=automatic_weather(g) if not (wind or precip or (manual_gc.get("temp_f") not in (None,""))) else {}
+    pg["weather"]={"wind_mph":sf(auto_w.get("wind_mph"),wind),"precip_prob":sf(auto_w.get("precip_prob"),precip),"temp_f":sf(auto_w.get("temp_f"),temp),"source":auto_w.get("source") or ("manual" if manual_gc else "")}
     pg["game_id"]=g.get("id"); pg["start_date"]=g.get("start_date") or g.get("startDate")
     pg["away_abbreviation"]=g.get("away_abbreviation") or g.get("awayAbbreviation") or ""
     pg["home_abbreviation"]=g.get("home_abbreviation") or g.get("homeAbbreviation") or ""
@@ -932,7 +967,7 @@ with TAB_DATA:
         st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
     st.markdown("**Current architecture**")
-    st.code("SportsDataverse/NCAA (free stats) + Underdog live CFB player lines → matchup/game environment → player opportunity → projection → Higher/Lower probability + edge → save/grade",language="text")
+    st.code("SportsDataverse/NCAA + drives + game rosters + advanced QB/RB/WR + situational/red-zone + Open-Meteo + Underdog live lines → CFB opportunity/hook/pressure/explosive engine → projection → Higher/Lower probability + edge → save/grade",language="text")
     st.caption("Injuries/depth charts are intentionally a separate adapter layer. CFB availability reporting is inconsistent, so the app does not pretend missing injury data means healthy.")
 
 with TAB_GRADE:

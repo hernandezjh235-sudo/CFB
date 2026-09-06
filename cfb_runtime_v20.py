@@ -142,7 +142,8 @@ def espn_games_for_date(date_key:str)->List[dict]:
             ht=home.get('team') or {}; at=away.get('team') or {}
             hn=ht.get('displayName') or ht.get('shortDisplayName'); an=at.get('displayName') or at.get('shortDisplayName')
             if not hn or not an:continue
-            out.append({'id':ev.get('id'),'week':None,'home_team':hn,'away_team':an,'home_points':_score(home),'away_points':_score(away),'start_date':ev.get('date') or comp.get('date'),'neutral_site':bool(comp.get('neutralSite')),'home_abbreviation':ht.get('abbreviation') or '','away_abbreviation':at.get('abbreviation') or '','home_espn_id':str(ht.get('id') or ''),'away_espn_id':str(at.get('id') or ''),'home_logo':_team_info(ht).get('logo'),'away_logo':_team_info(at).get('logo'),'status':((ev.get('status') or {}).get('type') or {}).get('name') or ''})
+            venue=comp.get('venue') or {}; address=venue.get('address') or {}
+            out.append({'id':ev.get('id'),'week':None,'home_team':hn,'away_team':an,'home_points':_score(home),'away_points':_score(away),'start_date':ev.get('date') or comp.get('date'),'neutral_site':bool(comp.get('neutralSite')),'home_abbreviation':ht.get('abbreviation') or '','away_abbreviation':at.get('abbreviation') or '','home_espn_id':str(ht.get('id') or ''),'away_espn_id':str(at.get('id') or ''),'home_logo':_team_info(ht).get('logo'),'away_logo':_team_info(at).get('logo'),'venue_city':address.get('city') or '','venue_state':address.get('state') or '','venue_name':venue.get('fullName') or '','status':((ev.get('status') or {}).get('type') or {}).get('name') or ''})
     except Exception:
         return []
     return out
