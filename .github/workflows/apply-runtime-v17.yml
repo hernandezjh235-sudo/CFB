@@ -1,0 +1,32 @@
+name: Apply CFB Runtime Player Board v1.7
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_ui_runtime_v17.py'
+      - '.github/workflows/apply-runtime-v17.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply runtime/UI repair
+        run: python scripts/upgrade_ui_runtime_v17.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py free_data_v15.py underdog_cfb_v15.py
+      - name: Commit upgraded app
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py
+          git commit -m 'Apply CFB v1.7 NFL-style live player board [skip ci]' || exit 0
+          git push
