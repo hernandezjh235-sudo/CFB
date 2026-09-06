@@ -13,7 +13,7 @@ import streamlit as st
 from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 
-APP_VERSION = "CFB Prop Engine v1.6 — LIVE CFB BOARD + CURRENT SLATE"
+APP_VERSION = "CFB Prop Engine v1.7 — NFL-STYLE LIVE PLAYER BOARD"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -73,6 +73,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown("""
+<style>
+.cfb-live-strip{background:#0a1621;border:1px solid #21415d;border-radius:14px;padding:10px 12px;margin:8px 0 12px;font-size:12px;color:#b9cada}.cfb-live-strip b{color:#65f28a}.cfb-raw-card{background:#0b141d;border:1px solid #203141;border-radius:14px;padding:10px 12px;margin:7px 0}.cfb-raw-name{font-weight:900;font-size:15px}.cfb-raw-sub{font-size:10px;color:#8fa4b8}.cfb-raw-line{font-size:20px;font-weight:950;margin-top:3px}
+</style>
+""", unsafe_allow_html=True)
 
 def secret(name: str, default: str = "") -> str:
     try:
@@ -638,12 +644,17 @@ with TAB_PLAYERS:
                     prop_rows=[r for r in ud_rows if norm_name(r.get("player")) in game_players]
             markets=sorted({str(r.get("prop")) for r in prop_rows if r.get("prop")})
             if markets:
-                default_markets=[x for x in ["Passing Yards","Rushing Yards","Receiving Yards","Rush + Rec TDs"] if x in markets]
-                chosen=st.multiselect("Underdog CFB markets",markets,default=default_markets or markets[:4])
+                preferred=[x for x in ["Passing Yards","Receiving Yards","Rushing Yards","Rush + Rec TDs"] if x in markets]
+                chosen=st.multiselect("Prop market",markets,default=(preferred[:1] if preferred else markets[:1]))
                 prop_rows=[r for r in prop_rows if r.get("prop") in chosen]
             with c2:
                 scope="all live CFB props" if selected_game is None else "matching this game"
-                st.caption(f"Underdog live board: {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}")
+                st.markdown(f"<div class='cfb-live-strip'><b>LIVE BOARD CONNECTED</b> · {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}</div>",unsafe_allow_html=True)
+            if prop_rows:
+                rawdf=pd.DataFrame(prop_rows)
+                rawcols=[c for c in ["player","team","matchup","prop","line","line_status","scheduled_at"] if c in rawdf.columns]
+                with st.expander("📡 Live player lines",expanded=True):
+                    st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
                 st.info("Underdog did not return a matching player line for this selected game yet. Refresh when the CFB board opens/updates.")
                 with st.expander("Underdog feed diagnostics"):
@@ -671,6 +682,8 @@ with TAB_PLAYERS:
     projected=[]
     if prop_rows:
         for r in prop_rows:
+            pr=lookup_player(players,r.get("player",""))
+            pr_team=str(pr.get("team") or "")
             row_game=selected_game
             if row_game is None:
                 ra,rh=norm_name(r.get("away")),norm_name(r.get("home"))
@@ -678,14 +691,13 @@ with TAB_PLAYERS:
                     ga=norm_name(gg.get("away_abbreviation")); gh=norm_name(gg.get("home_abbreviation"))
                     full_match=(ra and rh and ((norm_name(gg["away"])==ra and norm_name(gg["home"])==rh) or (ra in norm_name(gg["away"]) and rh in norm_name(gg["home"]))))
                     abbr_match=(ra and rh and ga==ra and gh==rh)
-                    if full_match or abbr_match:
+                    player_team_match=(pr_team and norm_name(pr_team) in {norm_name(gg["away"]),norm_name(gg["home"])})
+                    if full_match or abbr_match or player_team_match:
                         row_game=gg; break
                 if row_game is None:
-                    # Build a neutral placeholder game so the live line still appears instead of blanking the board.
                     away=r.get("away") or "Away"; home=r.get("home") or "Home"
                     row_game=project_game(away,home,ctx,{},neutral=True)
                     row_game["weather"]={}
-            pr=lookup_player(players,r.get("player",""))
             # Infer team from player bank if bookmaker omitted it.
             team=r.get("team") or pr.get("team")
             if team not in {row_game["away"],row_game["home"]}:
@@ -719,8 +731,12 @@ with TAB_PLAYERS:
         show=["player","team","prop","side","line","projection","edge","probability","status","notes"]
         if not pdf.empty:
             ranked=sorted(projected,key=lambda x:sf(x.get("probability")),reverse=True)
+            good_ranked=[x for x in ranked if sf(x.get("projection"))>0]
+            render_rows=(good_ranked or ranked)[:30]
+            if len(ranked)>30:
+                st.caption(f"Showing the top {len(render_rows)} model cards for speed · all {len(ranked)} rows remain in the compact table below.")
             cols=st.columns(2)
-            for i,rr in enumerate(ranked):
+            for i,rr in enumerate(render_rows):
                 with cols[i%2]: render_player_card(rr,ctx,rr.get("_game") or row_game)
             with st.expander("📋 Compact projection table",expanded=False):
                 pdf["probability"]=(pdf["probability"]*100).round(1)
@@ -729,8 +745,10 @@ with TAB_PLAYERS:
             if st.button("Save this projected board"):
                 path=DATA_DIR/"saved_prop_board.json"
                 path.write_text(json.dumps([{k:v for k,v in x.items() if k!="_game"} for x in projected],indent=2,default=str)); st.success(f"Saved {len(projected)} props for grading.")
+        matched=sum(1 for r in projected if sf(r.get("projection"))>0)
+        st.caption(f"Model joined {matched}/{len(projected)} selected live lines to usable player production.")
         missing=[r.get("player") for r in projected if r.get("projection",0)<=0]
-        if missing: st.warning("No usable player-season sample for: "+", ".join(map(str,missing[:12])))
+        if missing: st.warning("Live line loaded but no usable projection sample for: "+", ".join(map(str,missing[:12])))
 
 with TAB_DATA:
     st.subheader("Data Readiness")
