@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'scripts/upgrade_ui_v12.py'
+      - 'scripts/upgrade_ui_v12_fixed.py'
       - '.github/workflows/apply-ui-upgrade.yml'
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply upgrade
-        run: python scripts/upgrade_ui_v12.py
+        run: python scripts/upgrade_ui_v12_fixed.py
       - name: Syntax check
         run: python -m py_compile app.py
       - name: Commit upgraded app
@@ -34,4 +34,4 @@ jobs:
           git commit -m 'Apply CFB v1.2 elite player UI [skip ci]'
           git push
 
-# trigger v1.2 application
+# trigger fixed v1.2 application
