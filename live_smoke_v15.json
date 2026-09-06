@@ -1,0 +1,131 @@
+{
+  "free": {
+    "games": 0,
+    "players": 4747,
+    "teams": 401,
+    "markets": 0,
+    "health": {
+      "schedules": 85,
+      "player_box": 5775,
+      "adv_team": 166,
+      "power_index": 1776,
+      "betting": 85,
+      "espn_schedule": 0
+    },
+    "errors": {}
+  },
+  "underdog": {
+    "rows": 299,
+    "debug": [
+      {
+        "url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=ncaaf",
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "native": 0,
+        "jsonapi": 0,
+        "recursive": 0,
+        "rows": 0
+      },
+      {
+        "url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=NCAAF",
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "native": 0,
+        "jsonapi": 0,
+        "recursive": 0,
+        "rows": 0
+      },
+      {
+        "url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "status": 200,
+        "content_type": "application/json; charset=utf-8",
+        "native": 302,
+        "jsonapi": 0,
+        "recursive": 0,
+        "rows": 302
+      }
+    ],
+    "sample": [
+      {
+        "player": "Demond Williams",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "WSU",
+        "home": "WASH",
+        "matchup": "WSU @ WASH",
+        "event_id": "182954",
+        "underdog_id": "871e6b91-66ad-4729-a8f0-61301e099317",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T20:00:00Z"
+      },
+      {
+        "player": "CJ Carr",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "WIS",
+        "home": "ND",
+        "matchup": "WIS @ ND",
+        "event_id": "176851",
+        "underdog_id": "de9fdbca-8d4e-4cb8-8180-8f71c4d7d113",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T23:30:00Z"
+      },
+      {
+        "player": "Colton Joseph",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "WIS",
+        "home": "ND",
+        "matchup": "WIS @ ND",
+        "event_id": "176851",
+        "underdog_id": "a8b78d46-ca81-43b7-99bc-31ecca84f2fd",
+        "line_status": "active",
+        "scheduled_at": "2026-09-06T23:30:00Z"
+      },
+      {
+        "player": "Kevin Jennings",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "SMU",
+        "home": "FSU",
+        "matchup": "SMU @ FSU",
+        "event_id": "178380",
+        "underdog_id": "825fa395-6941-4c28-8f08-4e3d442de918",
+        "line_status": "active",
+        "scheduled_at": "2026-09-07T23:30:00Z"
+      },
+      {
+        "player": "Ashton Daniels",
+        "team": "",
+        "prop": "Rush + Rec TDs",
+        "line": 0.5,
+        "side": "AUTO",
+        "source": "Underdog",
+        "source_url": "https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb",
+        "away": "SMU",
+        "home": "FSU",
+        "matchup": "SMU @ FSU",
+        "event_id": "178380",
+        "underdog_id": "5f5cef3c-d89e-43c2-aa5c-0379a3d1fba5",
+        "line_status": "active",
+        "scheduled_at": "2026-09-07T23:30:00Z"
+      }
+    ]
+  }
+}
