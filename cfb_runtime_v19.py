@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from functools import lru_cache
 import re
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List
 
-from cfb_nfl_ui_v18 import espn_team_branding
+import requests
 
 PT = ZoneInfo('America/Los_Angeles')
+ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard'
 
 
 def _norm(x):
@@ -74,79 +76,157 @@ def filter_games_by_scope(games: List[dict], scope: str, now=None) -> List[dict]
     target = scope_target_date(scope, now)
     if target is None:
         return list(games or [])
-    out = []
-    for g in games or []:
-        dt = local_game_dt(g)
-        if dt and dt.date() == target:
-            out.append(g)
-    return out
+    return [g for g in (games or []) if local_game_dt(g) and local_game_dt(g).date() == target]
 
 
 def filter_props_by_scope(rows: List[dict], scope: str, now=None) -> List[dict]:
+    """Filter live props by local date. If today's board is already closed,
+    automatically show the next available dated board instead of a blank screen."""
+    now = now or local_now()
     target = scope_target_date(scope, now)
     if target is None:
         return list(rows or [])
-    dated, undated = [], []
+    dated = []
+    undated = []
+    future_dates = []
     for r in rows or []:
         dt = local_prop_dt(r)
         if dt is None:
             undated.append(r)
-        elif dt.date() == target:
+            continue
+        if dt.date() == target:
             dated.append(r)
-    # Prefer truly dated rows. If a provider omits timestamps, keep undated rows
-    # rather than blanking the live board.
-    return dated if dated else undated
+        if dt.date() >= now.date():
+            future_dates.append(dt.date())
+    if dated:
+        return dated
+    if future_dates:
+        nxt = min(future_dates)
+        return [r for r in (rows or []) if local_prop_dt(r) and local_prop_dt(r).date() == nxt]
+    return undated
 
 
-def _brand_for(name: str, abbreviation: str = '') -> dict:
-    brands = espn_team_branding() or {}
-    keys = [_norm(name), _norm(abbreviation)]
-    for k in keys:
+def prop_rows_date_label(rows: List[dict]) -> str:
+    dates = sorted({local_prop_dt(r).date() for r in (rows or []) if local_prop_dt(r)})
+    if not dates:
+        return ''
+    if len(dates) == 1:
+        return dates[0].strftime('%A, %B %-d')
+    return f"{dates[0].strftime('%b %-d')}–{dates[-1].strftime('%b %-d')}"
+
+
+def _hex(c, default='#2f81f7'):
+    c = str(c or '').strip().lstrip('#')
+    return f'#{c}' if len(c) in (3, 6) else default
+
+
+def _team_info(team: dict) -> dict:
+    if not isinstance(team, dict):
+        return {}
+    logo = str(team.get('logo') or '')
+    if not logo:
+        for z in team.get('logos') or []:
+            if isinstance(z, dict) and z.get('href'):
+                logo = str(z['href']); break
+    espn_id = str(team.get('id') or '')
+    if not logo and espn_id:
+        logo = f'https://a.espncdn.com/i/teamlogos/ncaa/500/{espn_id}.png'
+    return {
+        'logo': logo,
+        'color': _hex(team.get('color')),
+        'alternate_color': _hex(team.get('alternateColor'), '#8fa4b8'),
+        'abbreviation': str(team.get('abbreviation') or ''),
+        'espn_id': espn_id,
+    }
+
+
+@lru_cache(maxsize=16)
+def _scoreboard_branding_for_date(date_key: str) -> Dict[str, dict]:
+    out: Dict[str, dict] = {}
+    try:
+        r = requests.get(
+            ESPN_SCOREBOARD,
+            params={'dates': date_key, 'limit': 1000},
+            timeout=(4, 15),
+            headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'},
+        )
+        r.raise_for_status()
+        data = r.json()
+        for ev in data.get('events') or []:
+            for comp in ev.get('competitions') or []:
+                for competitor in comp.get('competitors') or []:
+                    team = competitor.get('team') or {}
+                    info = _team_info(team)
+                    names = {
+                        team.get('displayName'), team.get('shortDisplayName'), team.get('location'),
+                        team.get('name'), team.get('abbreviation'),
+                    }
+                    for n in names:
+                        if n:
+                            out[_norm(n)] = info
+    except Exception:
+        return {}
+    return out
+
+
+def scoreboard_branding(games: Iterable[dict]) -> Dict[str, dict]:
+    dates = set()
+    for g in games or []:
+        dt = local_game_dt(g)
+        if dt:
+            # ESPN date query uses calendar date; querying +/-1 protects late-night UTC crossover.
+            dates.update({dt.date() - timedelta(days=1), dt.date(), dt.date() + timedelta(days=1)})
+    out: Dict[str, dict] = {}
+    for d in sorted(dates):
+        out.update(_scoreboard_branding_for_date(d.strftime('%Y%m%d')))
+    return out
+
+
+def _best_brand(brands: Dict[str, dict], name: str, abbreviation: str = '') -> dict:
+    for k in (_norm(name), _norm(abbreviation)):
         if k and k in brands:
             return dict(brands[k])
     n = _norm(name)
     if not n:
         return {}
-    candidates = []
+    hits = []
     for k, info in brands.items():
         if len(k) < 3:
             continue
         if k in n or n in k:
             score = min(len(k), len(n)) / max(len(k), len(n))
-            candidates.append((score, len(k), info))
-    if not candidates:
+            hits.append((score, len(k), info))
+    if not hits:
         return {}
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    if candidates[0][0] < 0.45:
-        return {}
-    return dict(candidates[0][2])
+    hits.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return dict(hits[0][2]) if hits[0][0] >= 0.42 else {}
 
 
 def ensure_branding(ctx: Dict[str, dict], games: Iterable[dict] = (), players=None) -> Dict[str, dict]:
+    """Hydrate exact current-game aliases from ESPN scoreboard competitors.
+    This avoids relying on the separate /teams endpoint, whose response shape can change."""
     ctx = ctx or {}
+    games = list(games or [])
+    brands = scoreboard_branding(games)
 
     def ensure(team: str, abbr: str = ''):
         if not team:
             return
         current = ctx.setdefault(str(team), {})
-        info = _brand_for(str(team), str(abbr or ''))
+        info = _best_brand(brands, str(team), str(abbr or ''))
         if not info:
             return
         if not current.get('logo'):
             current['logo'] = info.get('logo') or ''
         if not current.get('color'):
             current['color'] = info.get('color') or '#2f81f7'
-        if not current.get('alternate_color'):
-            current['alternate_color'] = info.get('alternate_color') or '#8fa4b8'
-        if not current.get('abbreviation'):
-            current['abbreviation'] = info.get('abbreviation') or abbr or ''
-        if not current.get('espn_id'):
-            current['espn_id'] = info.get('espn_id') or ''
+        current.setdefault('alternate_color', info.get('alternate_color') or '#8fa4b8')
+        current.setdefault('abbreviation', info.get('abbreviation') or abbr or '')
+        current.setdefault('espn_id', info.get('espn_id') or '')
 
-    for g in games or []:
+    for g in games:
         ensure(g.get('away_team') or g.get('awayTeam') or g.get('away'), g.get('away_abbreviation') or g.get('awayAbbreviation') or '')
         ensure(g.get('home_team') or g.get('homeTeam') or g.get('home'), g.get('home_abbreviation') or g.get('homeAbbreviation') or '')
-
     try:
         if players is not None and not players.empty and 'team' in players.columns:
             for team in players['team'].dropna().astype(str).unique().tolist():
@@ -160,14 +240,7 @@ def logo_coverage(ctx: Dict[str, dict], games: Iterable[dict]) -> dict:
     teams = []
     for g in games or []:
         teams.extend([g.get('away_team') or g.get('away'), g.get('home_team') or g.get('home')])
-    teams = [str(t) for t in teams if t]
-    unique = list(dict.fromkeys(teams))
-    ready = 0
-    missing = []
-    for t in unique:
-        d = ctx.get(t, {})
-        if d.get('logo'):
-            ready += 1
-        else:
-            missing.append(t)
-    return {'teams': len(unique), 'logos': ready, 'missing': missing, 'coverage': (ready / len(unique) if unique else 1.0)}
+    unique = list(dict.fromkeys(str(t) for t in teams if t))
+    missing = [t for t in unique if not (ctx.get(t, {}) or {}).get('logo')]
+    ready = len(unique) - len(missing)
+    return {'teams': len(unique), 'logos': ready, 'missing': missing, 'coverage': ready / len(unique) if unique else 1.0}
