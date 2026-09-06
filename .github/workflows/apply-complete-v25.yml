@@ -1,0 +1,53 @@
+name: Apply CFB Complete v2.5
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_complete_v25.py'
+      - 'cfb_opportunity_v25.py'
+      - '.github/workflows/apply-complete-v25.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v2.5
+        run: python scripts/upgrade_complete_v25.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py cfb_opportunity_v25.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live opportunity data smoke
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from cfb_opportunity_v25 import enrich_opportunity
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now,filter_props_by_scope,games_from_props,ensure_branding,logo_coverage
+          now=local_now(); b,c,p,m=load_free_stack(now.year,2)
+          c,p,h=enrich_opportunity(now.year,b.get('resolved_week',1),c,p)
+          props,_=fetch_underdog_cfb_props(force=True); day=filter_props_by_scope(props,'Tomorrow',now); games=games_from_props(day,c); c=ensure_branding(c,games,p,day)
+          keys=['drives','team_box','adv_passing','adv_rushing','adv_receiving','adv_situational','game_rosters']
+          print('V25_HEALTH',h,'PLAYERS',len(p),'PROPS',len(props),'DAY',len(day),'GAMES',len(games),'LOGOS',logo_coverage(c,games))
+          assert all(h.get(k,0)>0 for k in keys)
+          assert len(p)>0 and len(day)>0 and len(games)>0
+          assert logo_coverage(c,games)['coverage']>=.90
+          assert 'starter_current' in p.columns and 'air_yard_share' in p.columns and 'qb_rush_share' in p.columns
+          enriched=sum(1 for d in c.values() if isinstance(d,dict) and d.get('drives_pg'))
+          print('ENRICHED_TEAMS',enriched)
+          assert enriched>50
+          PY
+      - name: Commit v2.5
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_runtime_v20.py
+          git commit -m 'Apply CFB v2.5 complete opportunity engine [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
