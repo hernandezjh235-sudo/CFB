@@ -11,8 +11,9 @@ import pandas as pd
 import requests
 import streamlit as st
 from free_data import load_free_stack
+from underdog_cfb import fetch_underdog_cfb_props, props_for_game
 
-APP_VERSION = "CFB Prop Engine v1.3 — FREE DATA + ELITE PLAYER CARDS"
+APP_VERSION = "CFB Prop Engine v1.4 — LIVE UNDERDOG CFB + ELITE PLAYER CARDS"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -35,6 +36,7 @@ PLAYER_MARKETS = {
     "Receptions": "player_receptions",
     "Pass + Rush Yards": "player_pass_rush_yds",
     "Rush + Rec Yards": "player_rush_reception_yds",
+    "Rush + Rec TDs": "player_rush_reception_tds",
     "Total TDs": "player_pass_rush_reception_tds",
 }
 ODDS_TO_LABEL = {v: k for k, v in PLAYER_MARKETS.items()}
@@ -375,6 +377,8 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
         proj=py+ry; sd=max(40,.18*proj)
     elif market_label=="Rush + Rec Yards":
         proj=(rush_y*rush_script*rush_match + rec_y*pass_script*pass_match)*pace_adj*snap_adj; sd=max(20,.29*proj)
+    elif market_label=="Rush + Rec TDs":
+        proj=max(.02,(sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj); sd=max(.65,math.sqrt(proj))
     elif market_label=="Total TDs":
         proj=max(.02,(sf(player.get("pass_td"))+sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj); sd=max(.7,math.sqrt(proj))
     else:
@@ -530,7 +534,7 @@ year=st.sidebar.number_input("Season",2020,2030,now.year,1)
 week=st.sidebar.number_input("Week",1,20,def_week,1)
 cfbd=CFBD(secret("CFBD_API_KEY")); odds=OddsAPI(secret("ODDS_API_KEY"))
 
-st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + Open-Meteo · paid APIs optional</span></div>""",unsafe_allow_html=True)
+st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + LIVE Underdog CFB lines</span></div>""",unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("CFB Controls")
@@ -602,10 +606,46 @@ with TAB_PLAYERS:
     game_labels=[f"{g['away']} @ {g['home']}" for g in week_games]
     selected_label=st.selectbox("Game",game_labels) if game_labels else None
     selected_game=week_games[game_labels.index(selected_label)] if selected_label in game_labels else None
-    source=st.radio("Prop lines",(["Live Odds API","Manual"] if odds.ready else ["Manual"]),horizontal=True)
+    live_sources=["Underdog Live"] + (["Live Odds API"] if odds.ready else []) + ["Manual"]
+    source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
-    if selected_game and source=="Live Odds API":
-        if not odds.ready: st.info("Add ODDS_API_KEY or switch to Manual.")
+    if selected_game and source=="Underdog Live":
+        c1,c2=st.columns([1,2])
+        with c1:
+            ud_refresh=st.button("🔄 Refresh Underdog CFB",type="primary",use_container_width=True)
+        try:
+            if ud_refresh or "ud_cfb_rows" not in st.session_state:
+                ud_rows,ud_debug=fetch_underdog_cfb_props(force=ud_refresh)
+                st.session_state["ud_cfb_rows"]=ud_rows
+                st.session_state["ud_cfb_debug"]=ud_debug
+            ud_rows=st.session_state.get("ud_cfb_rows",[])
+            prop_rows=props_for_game(ud_rows,selected_game["away"],selected_game["home"])
+            # Some Underdog CFB rows carry a school abbreviation while the free
+            # schedule uses the full school name. Player lookup below canonicalizes
+            # the team; do not discard those live lines just because the names differ.
+            if not prop_rows:
+                game_players=set()
+                if players is not None and not players.empty and "team" in players.columns:
+                    for tm in [selected_game["away"],selected_game["home"]]:
+                        hit=players[players["team"].astype(str).map(norm_name)==norm_name(tm)]
+                        game_players.update(hit["player"].astype(str).map(norm_name).tolist())
+                if game_players:
+                    prop_rows=[r for r in ud_rows if norm_name(r.get("player")) in game_players]
+            markets=sorted({str(r.get("prop")) for r in prop_rows if r.get("prop")})
+            if markets:
+                default_markets=[x for x in ["Passing Yards","Rushing Yards","Receiving Yards","Rush + Rec TDs"] if x in markets]
+                chosen=st.multiselect("Underdog CFB markets",markets,default=default_markets or markets[:4])
+                prop_rows=[r for r in prop_rows if r.get("prop") in chosen]
+            with c2:
+                st.caption(f"Underdog live board: {len(ud_rows)} CFB lines pulled · {len(prop_rows)} matching this game")
+            if not prop_rows:
+                st.info("Underdog did not return a matching player line for this selected game yet. Refresh when the CFB board opens/updates.")
+                with st.expander("Underdog feed diagnostics"):
+                    st.json(st.session_state.get("ud_cfb_debug",[]))
+        except Exception as e:
+            st.error(f"Underdog CFB pull failed: {e}")
+    elif selected_game and source=="Live Odds API":
+        if not odds.ready: st.info("Add ODDS_API_KEY or switch to Underdog Live/Manual.")
         else:
             event=market_map.get((norm_name(selected_game["away"]),norm_name(selected_game["home"])),{})
             event_id=event.get("event_id")
@@ -629,9 +669,14 @@ with TAB_PLAYERS:
             # Infer team from player bank if bookmaker omitted it.
             team=r.get("team") or pr.get("team")
             if team not in {selected_game["away"],selected_game["home"]}:
-                # fuzzy canonical team match
-                for t in [selected_game["away"],selected_game["home"]]:
-                    if norm_name(team)==norm_name(t): team=t
+                # Prefer the model player-bank school when Underdog uses an abbreviation.
+                pr_team=pr.get("team")
+                if pr_team in {selected_game["away"],selected_game["home"]}:
+                    team=pr_team
+                else:
+                    for t in [selected_game["away"],selected_game["home"]]:
+                        if norm_name(team)==norm_name(t) or norm_name(team) in norm_name(t) or norm_name(t) in norm_name(team):
+                            team=t; break
             opp=selected_game["home"] if team==selected_game["away"] else selected_game["away"]
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
             proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,selected_game,team or "")
@@ -641,7 +686,11 @@ with TAB_PLAYERS:
             if r.get("prop") in {"Passing Yards","Pass Attempts","Completions","Receiving Yards","Receptions","Pass + Rush Yards"}:
                 wfactor=1.0-clamp(max(wind-15,0)*.006 + max(precip-60,0)*.0015,0,.16)
                 if wfactor<.995: proj*=wfactor; notes.append("weather passing tax")
-            side=r.get("side","Over"); p=prop_probability(proj,r.get("line"),sd,side)
+            side=str(r.get("side") or "Over")
+            if side.upper()=="AUTO":
+                side="Over" if proj>=sf(r.get("line")) else "Under"
+                notes.append("side selected from model vs live Underdog line")
+            p=prop_probability(proj,r.get("line"),sd,side)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status="PLAYABLE" if p>=.60 and proj>0 else "LEAN" if p>=.56 and proj>0 else "TRACK"
             q={**r,"team":team,"opp":opp,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
@@ -684,7 +733,7 @@ with TAB_DATA:
         st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
     st.markdown("**Current architecture**")
-    st.code("SportsDataverse/NCAA (free) → cached parquet/JSON → team power + pass/rush matchup → game environment → player opportunity → projection → manual prop line → probability/edge → save/grade",language="text")
+    st.code("SportsDataverse/NCAA (free stats) + Underdog live CFB player lines → matchup/game environment → player opportunity → projection → Higher/Lower probability + edge → save/grade",language="text")
     st.caption("Injuries/depth charts are intentionally a separate adapter layer. CFB availability reporting is inconsistent, so the app does not pretend missing injury data means healthy.")
 
 with TAB_GRADE:
