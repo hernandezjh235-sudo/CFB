@@ -1,0 +1,59 @@
+name: Apply CFB Final v2.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_final_v21.py'
+      - '.github/workflows/apply-final-v21.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.1 patch
+        run: python scripts/upgrade_final_v21.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live data + logo + player-team validation
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage
+          import re
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True)
+          pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx)
+          ctx=ensure_branding(ctx,games,players,pday)
+          h=logo_coverage(ctx,games)
+          shown=['Trinidad Chambliss','Demond Williams','CJ Carr','Lincoln Kienholz','Caden Pinnick','Colton Joseph']
+          checks={}
+          for n in shown:
+              hit=players[players.player.astype(str).str.lower()==n.lower()] if not players.empty else players
+              team=str(hit.iloc[0].get('team')) if len(hit) else ''
+              checks[n]={'rows':len(hit),'team':team,'numeric_team':bool(re.fullmatch(r'\d+(?:\.0)?',team))}
+          print({'props':len(props),'tomorrow_props':len(pday),'games':len(games),'logos':h,'players':len(players),'shown':checks})
+          assert len(props)>0 and len(pday)>0
+          assert len(games)>0
+          assert h['coverage']>=.90
+          assert all(not x['numeric_team'] for x in checks.values() if x['rows']), checks
+          PY
+      - name: Commit final upgraded files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py free_data_v16.py cfb_nfl_ui_v18.py
+          git commit -m 'Apply CFB v2.1 final logos colors and opportunity calibration [skip ci]' || exit 0
+          git push
