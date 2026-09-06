@@ -10,8 +10,9 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+from free_data import load_free_stack
 
-APP_VERSION = "CFB Prop Engine v1.2 — ELITE PLAYER CARDS + CFB DATA STACK"
+APP_VERSION = "CFB Prop Engine v1.3 — FREE DATA + ELITE PLAYER CARDS"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -529,26 +530,32 @@ year=st.sidebar.number_input("Season",2020,2030,now.year,1)
 week=st.sidebar.number_input("Week",1,20,def_week,1)
 cfbd=CFBD(secret("CFBD_API_KEY")); odds=OddsAPI(secret("ODDS_API_KEY"))
 
-st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>CFBD + Odds API + Open-Meteo ready</span></div>""",unsafe_allow_html=True)
+st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + Open-Meteo · paid APIs optional</span></div>""",unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("CFB Controls")
-    st.write("CFBD", "✅" if cfbd.ready else "❌ add CFBD_API_KEY")
-    st.write("Odds", "✅" if odds.ready else "⚪ optional ODDS_API_KEY")
+    st.write("Free CFB data", "✅ SportsDataverse + NCAA")
+    st.write("CFBD paid API", "✅ optional" if cfbd.ready else "⚪ not needed")
+    st.write("Odds paid API", "✅ optional" if odds.ready else "⚪ not needed — enter player lines manually")
     force=st.button("🔄 Refresh CFB Data",use_container_width=True,type="primary")
-    st.caption("API keys stay server-side in Railway/GitHub secrets. The model never hardcodes a sportsbook line as truth.")
+    st.caption("No paid key is required. SportsDataverse supplies schedules/player/team/advanced/FPI data; NCAA supplies ranking fallback. Paid APIs remain optional only.")
 
-with st.spinner("Loading CFB data…"):
-    bundle=load_bundle(cfbd,int(year),int(week),force=force) if cfbd.ready else {"games":[],"core":[],"sp":[],"srs":[],"elo":[],"rankings":[],"talent":[],"player_stats":[],"advanced":[],"errors":{}}
-ctx=build_team_context(bundle)
-gp=team_games_played(bundle.get("games",[]),int(week))
-players=parse_player_stats(bundle.get("player_stats",[]),gp)
+with st.spinner("Loading FREE CFB data…"):
+    if cfbd.ready:
+        bundle=load_bundle(cfbd,int(year),int(week),force=force)
+        ctx=build_team_context(bundle)
+        gp=team_games_played(bundle.get("games",[]),int(week))
+        players=parse_player_stats(bundle.get("player_stats",[]),gp)
+        try: game_odds=odds.game_odds(force=force) if odds.ready else []
+        except Exception as e: game_odds=[]; bundle.setdefault("errors",{})["odds"]=str(e)
+        market_map=implied_market(game_odds)
+        data_mode="CFBD API"
+    else:
+        bundle,ctx,players,market_map=load_free_stack(int(year),int(week))
+        data_mode="FREE SportsDataverse/NCAA"
 injuries_df=load_optional_csv("injuries.csv")
 depth_df=load_optional_csv("depth_chart.csv")
 game_context_df=load_optional_csv("game_context.csv")
-try: game_odds=odds.game_odds(force=force) if odds.ready else []
-except Exception as e: game_odds=[]; bundle.setdefault("errors",{})["odds"]=str(e)
-market_map=implied_market(game_odds)
 
 # Current week games
 week_games=[]
@@ -573,8 +580,7 @@ TAB_EVENTS,TAB_PLAYERS,TAB_RANK,TAB_DATA,TAB_GRADE=st.tabs(["Events","Players","
 with TAB_EVENTS:
     st.subheader("Moneyline · Spread · Total")
     st.caption("Moneyline blends SP+, CORE, SRS, Elo, talent and home field. AP rank is displayed as context only. Totals use offense/defense quality, pace and explosiveness, with market lines only as a small stabilizer/audit.")
-    if not cfbd.ready: st.warning("Add CFBD_API_KEY to load the current CFB slate and ratings.")
-    elif not week_games: st.info("No games loaded for this week yet. Try Refresh or a different week.")
+    if not week_games: st.info("No games loaded for this week yet. Try Refresh or a different week.")
     else:
         for g in sorted(week_games,key=lambda x:x.get("start_date") or ""):
             render_game_card(g)
@@ -596,7 +602,7 @@ with TAB_PLAYERS:
     game_labels=[f"{g['away']} @ {g['home']}" for g in week_games]
     selected_label=st.selectbox("Game",game_labels) if game_labels else None
     selected_game=week_games[game_labels.index(selected_label)] if selected_label in game_labels else None
-    source=st.radio("Prop lines",["Live Odds API","Manual"],horizontal=True)
+    source=st.radio("Prop lines",(["Live Odds API","Manual"] if odds.ready else ["Manual"]),horizontal=True)
     prop_rows=[]
     if selected_game and source=="Live Odds API":
         if not odds.ready: st.info("Add ODDS_API_KEY or switch to Manual.")
@@ -655,10 +661,11 @@ with TAB_PLAYERS:
                 path=DATA_DIR/"saved_prop_board.json"
                 path.write_text(json.dumps(projected,indent=2,default=str)); st.success(f"Saved {len(projected)} props for grading.")
         missing=[r.get("player") for r in projected if r.get("projection",0)<=0]
-        if missing: st.warning("No usable CFBD player season sample for: "+", ".join(map(str,missing[:12])))
+        if missing: st.warning("No usable player-season sample for: "+", ".join(map(str,missing[:12])))
 
 with TAB_DATA:
     st.subheader("Data Readiness")
+    st.success(f"Active source: {data_mode}")
     checks=[]
     for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
         v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
@@ -670,11 +677,14 @@ with TAB_DATA:
         {"Layer":"depth_chart.csv","Rows":len(depth_df),"Use":"starter/backup role adjustment"},
         {"Layer":"game_context.csv","Rows":len(game_context_df),"Use":"wind/rain/neutral-site weather context"},
     ]),use_container_width=True,hide_index=True)
+    if bundle.get("free_health"):
+        st.markdown("**Free-source rows loaded**")
+        st.dataframe(pd.DataFrame([{"Dataset":k,"Rows":v,"Ready":v>0} for k,v in bundle["free_health"].items()]),use_container_width=True,hide_index=True)
     if bundle.get("errors"):
-        st.warning("Some endpoints did not load. The app keeps the rest running and reports them here instead of silently substituting fake data.")
+        st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
     st.markdown("**Current architecture**")
-    st.code("CFBD → cached raw data → team power/opponent unit context → game environment → player opportunity → prop projection → market line → probability/edge → save/grade",language="text")
+    st.code("SportsDataverse/NCAA (free) → cached parquet/JSON → team power + pass/rush matchup → game environment → player opportunity → projection → manual prop line → probability/edge → save/grade",language="text")
     st.caption("Injuries/depth charts are intentionally a separate adapter layer. CFB availability reporting is inconsistent, so the app does not pretend missing injury data means healthy.")
 
 with TAB_GRADE:
