@@ -1,0 +1,59 @@
+name: Apply CFB Opportunity v2.4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_opportunity_v24.py'
+      - '.github/workflows/apply-opportunity-v24.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v2.4 patch
+        run: python scripts/upgrade_opportunity_v24.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live advanced opportunity smoke
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          from cfb_runtime_v20 import local_now, filter_props_by_scope, games_from_props, ensure_branding, logo_coverage, canonical_prop_team
+          now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
+          props,_=fetch_underdog_cfb_props(force=True); pday=filter_props_by_scope(props,'Tomorrow',now)
+          games=games_from_props(pday,ctx); ctx=ensure_branding(ctx,games,players,pday)
+          h=bundle.get('free_health',{}); ah=bundle.get('advanced_player_health',{})
+          print({'players':len(players),'props':len(props),'day_props':len(pday),'games':len(games),'logos':logo_coverage(ctx,games),'rosters':h.get('rosters'),'game_rosters':h.get('game_rosters'),'advanced':ah,'roster_count':bundle.get('current_roster_count')})
+          assert len(players)>0 and len(pday)>0 and len(games)>0
+          assert logo_coverage(ctx,games)['coverage']>=.90
+          assert h.get('game_rosters',0)>0
+          assert ah.get('passing',0)>0 and ah.get('rushing',0)>0 and ah.get('receiving',0)>0 and ah.get('situational',0)>0
+          assert 'current_team' in players.columns
+          assert any(c in players.columns for c in ['adv_pass_att','adv_rush_car','adv_targets'])
+          shown=['Lincoln Kienholz','Caden Pinnick','Colton Joseph','Trinidad Chambliss','CJ Carr','Demond Williams']
+          audit={}
+          for n in shown:
+              hit=players[players.player.astype(str).str.lower()==n.lower()]
+              audit[n]=(hit.iloc[0].to_dict() if len(hit) else {'missing':True})
+          print('PLAYER_AUDIT',audit)
+          PY
+      - name: Commit v2.4
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py free_data_v16.py cfb_runtime_v20.py
+          git commit -m 'Apply CFB v2.4 advanced player opportunity engine [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
