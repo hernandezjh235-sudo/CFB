@@ -16,7 +16,7 @@ from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_mon
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 
-APP_VERSION = "CFB Prop Engine v2.1 — NFL-STYLE FINAL BOARD + OPPORTUNITY CALIBRATION"
+APP_VERSION = "CFB Prop Engine v2.3 — NFL-STYLE FINAL + CURRENT ROSTER OPPORTUNITY"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -368,7 +368,16 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     # We do NOT use the sportsbook line value to set the projection; we only shrink
     # stale/small personal samples toward independent team production.
     team_pass=sf(team_ctx.get("team_pass_yds_pg")); team_att=sf(team_ctx.get("team_pass_att_pg")); team_comp=sf(team_ctx.get("team_pass_comp_pg"))
-    if sample_source=="prior" and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Pass + Rush Yards"}:
+    sample_team=str(player.get('team') or '')
+    current_team=str(player.get('current_team') or '')
+    transferred=bool(sample_source=='prior' and current_team and sample_team and norm_name(current_team)!=norm_name(sample_team))
+    if transferred and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Pass + Rush Yards"}:
+        if team_pass>0: pass_y=team_pass*.90
+        if team_att>0: pass_att=team_att*.90
+        if team_comp>0: comp=team_comp*.90
+        if sf(team_ctx.get('team_pass_td_pg'))>0: pass_td=sf(team_ctx.get('team_pass_td_pg'))*.88
+        notes.append('transfer/current-role reset to new-team opportunity')
+    if sample_source=="prior" and not transferred and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Pass + Rush Yards"}:
         rel=clamp(gp/(gp+7.0),.18,.72)
         if team_pass>0 and (pass_y<=0 or pass_y < team_pass*.62):
             pass_y=rel*pass_y + (1-rel)*(team_pass*.90); notes.append("role reset: prior backup sample shrunk to team QB baseline")
@@ -793,8 +802,15 @@ with TAB_PLAYERS:
                     away=r.get("away") or "Away"; home=r.get("home") or "Home"
                     row_game=project_game(away,home,ctx,{},neutral=True)
                     row_game["weather"]={}
-            # Resolve Underdog abbreviations to the full school used by the model/game board.
-            team=canonical_prop_team(r,row_game,pr)
+            # Current-season roster identity overrides the historical sample school.
+            current_team=str(pr.get('current_team') or '')
+            team=''
+            if current_team:
+                for t in [row_game['away'],row_game['home']]:
+                    a,b=norm_name(current_team),norm_name(t)
+                    if a==b or (len(a)>=4 and (a in b or b in a)):
+                        team=t; break
+            if not team: team=canonical_prop_team(r,row_game,pr)
             opp=row_game["home"] if team==row_game["away"] else row_game["away"]
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
             proj,sd,notes=player_projection(pr,r.get("prop"),tc,oc,row_game,team or "")

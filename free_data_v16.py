@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from io import BytesIO
+import requests
 import numpy as np
 import pandas as pd
 import free_data_v15 as base
@@ -71,6 +73,12 @@ def load_free_stack(year:int, week:int):
     prev_player_box=grab('player_box','player_box',int(year)-1)
     prev_team_box=grab('team_box','team_box',int(year)-1)
     prev_schedule=grab('schedules','cfb_schedule',int(year)-1)
+    try:
+        roster_url=f'https://github.com/sportsdataverse/sportsdataverse-data/releases/download/espn_cfb_rosters/cfb_rosters_{int(year)}.parquet'
+        rr=requests.get(roster_url,timeout=(5,30),headers={'User-Agent':'Mozilla/5.0'})
+        rr.raise_for_status(); roster=pd.read_parquet(BytesIO(rr.content)); health['rosters']=len(roster)
+    except Exception as e:
+        roster=pd.DataFrame(); health['rosters']=0; errors['rosters']=str(e)
 
     resolved_week=int(week)
     wc=base._col(schedule,'week','season_week') if schedule is not None else None
@@ -151,6 +159,34 @@ def load_free_stack(year:int, week:int):
             d=ctx.get(raw,{}) or {}
             return str(d.get('canonical_name') or raw)
         players['team']=players['team'].map(_canon_player_team)
+
+    # Current-season roster is the source of truth for TODAY'S school. Prior-season
+    # box stats remain useful production evidence, but transfers inherit the new team's
+    # logo, opponent matchup and opportunity baseline.
+    roster_map={}
+    roster_rows=[]
+    if roster is not None and not roster.empty:
+        nc=base._col(roster,'athlete_display_name','player_name','athlete_name','player','athlete_full_name','full_name')
+        tc=base._col(roster,'team_display_name','team_short_display_name','team_location','school','team')
+        if nc and tc:
+            for _,row in roster.iterrows():
+                name=str(row.get(nc) or '').strip(); team=str(row.get(tc) or '').strip()
+                if not name or not team or name.lower()=='nan' or team.lower()=='nan':continue
+                if team.replace('.0','').isdigit():
+                    d=next((v for v in ctx.values() if isinstance(v,dict) and str(v.get('espn_id') or '') in {team,team.replace('.0','')}),{})
+                    team=str(d.get('canonical_name') or d.get('display_name') or team)
+                roster_map[_norm(name)]=team
+                roster_rows.append((name,team))
+    if players is None or players.empty:
+        players=pd.DataFrame(columns=['player','team','current_team','games','pass_yds','pass_att','pass_comp','pass_td','pass_int','rush_yds','rush_att','rush_td','rec_yds','receptions','rec_td','sample_source'])
+    if 'current_team' not in players.columns: players['current_team']=''
+    players['current_team']=players['player'].astype(str).map(lambda x: roster_map.get(_norm(x),'') if _norm(x) in roster_map else '')
+    existing=set(players['player'].astype(str).map(_norm))
+    add=[]
+    for name,team in roster_rows:
+        if _norm(name) in existing:continue
+        add.append({'player':name,'team':team,'current_team':team,'games':0,'pass_yds':0.0,'pass_att':0.0,'pass_comp':0.0,'pass_td':0.0,'pass_int':0.0,'rush_yds':0.0,'rush_att':0.0,'rush_td':0.0,'rec_yds':0.0,'receptions':0.0,'rec_td':0.0,'sample_source':'roster'})
+    if add: players=pd.concat([players,pd.DataFrame(add)],ignore_index=True,sort=False)
 
     cur_team=_team_baselines(team_box,resolved_week)
     prev_team=_team_baselines(prev_team_box,None)
