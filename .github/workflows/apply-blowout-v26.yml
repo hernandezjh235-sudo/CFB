@@ -1,0 +1,60 @@
+name: Apply CFB Blowout v2.6
+on:
+  push:
+    paths:
+      - 'scripts/upgrade_blowout_v26.py'
+      - 'cfb_blowout_v26.py'
+      - '.github/workflows/apply-blowout-v26.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.6 blowout engine
+        run: python scripts/upgrade_blowout_v26.py
+      - name: Syntax check
+        run: python -m py_compile app.py free_data_v16.py cfb_runtime_v20.py cfb_nfl_ui_v18.py underdog_cfb_v15.py cfb_opportunity_v25.py cfb_blowout_v26.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live blowout smoke
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          from cfb_opportunity_v25 import enrich_opportunity
+          from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player_blowout_modifier
+          from cfb_runtime_v20 import local_now
+          now=local_now(); b,c,p,m=load_free_stack(now.year,2)
+          c,p,h25=enrich_opportunity(now.year,b.get('resolved_week',1),c,p)
+          c,h26=enrich_blowout_context(now.year,c)
+          print('BLOWOUT_HEALTH',h26)
+          # Verify historical coach/rotation proxies exist for a meaningful number of teams.
+          teams=[(k,v) for k,v in c.items() if isinstance(v,dict) and v.get('coach_blowout_samples',0)>0]
+          print('COACH_TEAMS',len(teams), teams[:5])
+          assert len(teams)>40
+          # Synthetic high-margin profile validates the CFB-specific role logic without using a betting line.
+          names=[k for k,v in c.items() if isinstance(v,dict) and v.get('coach_blowout_samples',0)>0]
+          home=names[0]; away=names[1]
+          g={'home':home,'away':away,'model_home_margin':28.0,'model_total':61.0,'favorite':home}
+          prof=game_blowout_profile(g,c[home],c[away]); g.update(prof)
+          print('PROFILE',prof)
+          assert prof['blowout_level'] in {'HIGH','EXTREME'} and prof['qb_starter_retention']<1
+          qbm=player_blowout_modifier({'starter_current':True},'Passing Yards',g,home,c[home])
+          dog=player_blowout_modifier({'starter_current':True},'Pass Attempts',g,away,c[away])
+          print('QB_FAV',qbm,'DOG_PASS',dog)
+          assert qbm[0]<1 and dog[0]>1 and qbm[1]>1
+          PY
+      - name: Commit v2.6
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_nfl_ui_v18.py
+          git commit -m 'Apply CFB v2.6 coach-aware blowout engine [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
