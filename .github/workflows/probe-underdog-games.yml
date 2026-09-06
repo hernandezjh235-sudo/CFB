@@ -1,0 +1,21 @@
+name: Probe Underdog CFB games
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-underdog-games.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install requests
+      - run: |
+          python - <<'PY'
+          import requests
+          u='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
+          h={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X)','Accept':'application/json,text/plain,*/*','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
+          j=requests.get(u,headers=h,timeout=20).json()
+          for g in j.get('games',[]):
+              if str(g.get('id')) in {'173006','176851','182954'}: print('GAME',g)
+          PY
