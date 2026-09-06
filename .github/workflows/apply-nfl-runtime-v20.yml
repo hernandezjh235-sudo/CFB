@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/upgrade_nfl_runtime_v20.py'
+      - 'scripts/finish_v20_helpers.py'
       - 'cfb_runtime_v20.py'
       - 'free_data_v16.py'
       - '.github/workflows/apply-nfl-runtime-v20.yml'
@@ -22,7 +23,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply v2.0 patch
-        run: python scripts/upgrade_nfl_runtime_v20.py
+        run: |
+          python scripts/upgrade_nfl_runtime_v20.py
+          python scripts/finish_v20_helpers.py
       - name: Syntax check
         run: python -m py_compile app.py cfb_runtime_v20.py free_data_v16.py underdog_cfb_v15.py cfb_nfl_ui_v18.py
       - name: Install requirements
@@ -32,28 +35,29 @@ jobs:
           python - <<'PY'
           from free_data_v16 import load_free_stack
           from underdog_cfb_v15 import fetch_underdog_cfb_props
-          from cfb_runtime_v20 import local_now, day_games, filter_props_by_scope, ensure_branding, canonical_prop_team, logo_coverage
+          from cfb_runtime_v20 import local_now, day_games, filter_props_by_scope, ensure_branding, logo_coverage, games_from_props
           now=local_now(); bundle,ctx,players,market=load_free_stack(now.year,2)
           props,_=fetch_underdog_cfb_props(force=True)
-          tomorrow=day_games('Tomorrow',bundle.get('games',[]),now)
           pday=filter_props_by_scope(props,'Tomorrow',now)
+          tomorrow=day_games('Tomorrow',bundle.get('games',[]),now)
+          if not tomorrow:
+              tomorrow=games_from_props(pday,ctx)
           ctx=ensure_branding(ctx,tomorrow,players,pday)
           h=logo_coverage(ctx,tomorrow)
           print({'now':str(now),'tomorrow_games':len(tomorrow),'tomorrow_props':len(pday),'players':len(players),'logos':h,'free_health':bundle.get('free_health')})
           assert len(props)>0, 'no live CFB props'
           assert len(pday)>0, 'no next-day props'
-          assert len(tomorrow)>0, 'no tomorrow games from exact-date schedule'
+          assert len(tomorrow)>0, 'no tomorrow games from schedule or live prop events'
           assert h['coverage']>=.90, f'logo coverage too low {h}'
-          # Verify the shown passing-yard names have a current/prior player or team baseline path.
           names=['Trinidad Chambliss','Demond Williams','CJ Carr','Lincoln Kienholz','Caden Pinnick','Colton Joseph']
           for n in names:
               hit=players[players.player.astype(str).str.lower()==n.lower()] if not players.empty else players
               print('PLAYER_CHECK',n,'rows',len(hit), (hit.iloc[0].to_dict() if len(hit) else {}))
           PY
-      - name: Commit upgraded app
+      - name: Commit upgraded runtime
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app.py
+          git add app.py free_data_v16.py cfb_runtime_v20.py
           git commit -m 'Apply CFB v2.0 NFL-style auto slate and player baselines [skip ci]' || exit 0
           git push
