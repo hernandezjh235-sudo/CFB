@@ -1,0 +1,36 @@
+name: Apply CFB Underdog Live Upgrade
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'underdog_cfb.py'
+      - 'scripts/upgrade_underdog_v14.py'
+      - '.github/workflows/apply-underdog-v14.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-underdog-upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply CFB Underdog upgrade
+        run: python scripts/upgrade_underdog_v14.py
+      - name: Syntax check
+        run: python -m py_compile app.py underdog_cfb.py free_data.py
+      - name: Commit upgraded app
+        run: |
+          if git diff --quiet -- app.py; then
+            echo 'No app changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py
+          git commit -m 'Apply CFB v1.4 live Underdog player lines [skip ci]'
+          git push
