@@ -1,0 +1,20 @@
+name: Probe Player Box v2.6
+on:
+  push:
+    paths: ['.github/workflows/probe-playerbox-v26.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install pandas pyarrow requests numpy
+      - name: Probe
+        run: |
+          python - <<'PY'
+          import free_data_v15 as b
+          p=b._parquet('player_box',2025,'player_box'); s=b._parquet('schedules',2025,'cfb_schedule')
+          print('P_COLS',list(p.columns)); print('P_SAMPLE',p.head(3).to_dict('records'))
+          print('S_COLS',list(s.columns)); print('S_SAMPLE',s[['game_id','home_team','away_team','home_score','away_score']].dropna().head(3).to_dict('records') if all(x in s.columns for x in ['game_id','home_team','away_team','home_score','away_score']) else s.head(3).to_dict('records'))
+          PY
