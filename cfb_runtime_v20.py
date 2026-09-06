@@ -240,9 +240,13 @@ def ensure_branding(ctx:Dict[str,dict],games:Iterable[dict]=(),players=None,prop
 
 def canonical_prop_team(row:dict,game:dict,player:dict=None)->str:
     """Resolve book abbreviations (MISS/WIS/WSU/etc.) to the full school used by the model."""
-    player=player or {}; raw=str(row.get('team') or ''); pr=str(player.get('team') or '')
+    player=player or {}; raw=str(row.get('team') or ''); pr=str(player.get('team') or ''); current=str(player.get('current_team') or '')
     away=str(game.get('away') or game.get('away_team') or ''); home=str(game.get('home') or game.get('home_team') or '')
     aa=str(game.get('away_abbreviation') or ''); ha=str(game.get('home_abbreviation') or '')
+    cn=_norm(current)
+    for full,abbr in ((away,aa),(home,ha)):
+        fn=_norm(full); an=_norm(abbr)
+        if cn and (cn==fn or cn==an or (len(cn)>=4 and (cn in fn or fn in cn))):return full
     n=_norm(raw)
     if n and n==_norm(aa):return away
     if n and n==_norm(ha):return home

@@ -42,6 +42,56 @@ def _team_baselines(df:pd.DataFrame, max_week:int|None=None):
     return out
 
 
+def _advanced_player_features(passing,rushing,receiving,max_week):
+    rows={}
+    def add(name,team,vals):
+        if not name:return
+        k=_norm(name); d=rows.setdefault(k,{'player_key':k,'adv_team':str(team or '')})
+        for key,val in vals.items():
+            try:
+                f=float(val)
+                if np.isfinite(f): d[key]=d.get(key,0.0)+f
+            except Exception: pass
+    def week_filter(df):
+        if df is None or df.empty:return df
+        wc=base._col(df,'week','season_week')
+        if wc:return df[pd.to_numeric(df[wc],errors='coerce').fillna(99)<=int(max_week)].copy()
+        return df.copy()
+    p=week_filter(passing)
+    if p is not None and not p.empty:
+        nc=base._col(p,'passer_player_name'); tc=base._col(p,'pos_team'); gc=base._col(p,'game_id')
+        for _,r in p.iterrows():
+            add(r.get(nc),r.get(tc),{'adv_pass_att':r.get('Att',0),'adv_pass_comp':r.get('Comp',0),'adv_pass_yds':r.get('Yds',0),'adv_pass_epa_total':r.get('EPA',0),'adv_pass_sr_num':float(r.get('SR',0))*float(r.get('Att',0) or 0),'adv_cpoe_num':float(r.get('CPOE',0))*float(r.get('Att',0) or 0),'adv_airyds':r.get('AirYds',0)})
+    ru=week_filter(rushing)
+    if ru is not None and not ru.empty:
+        nc=base._col(ru,'rusher_player_name'); tc=base._col(ru,'pos_team');
+        team_car=ru.groupby(tc)['Car'].sum().to_dict() if tc and 'Car' in ru.columns else {}
+        for _,r in ru.iterrows():
+            team=str(r.get(tc) or ''); car=float(r.get('Car',0) or 0); den=float(team_car.get(team,0) or 0)
+            add(r.get(nc),team,{'adv_rush_car':car,'adv_rush_yds':r.get('Yds',0),'adv_rush_epa_total':r.get('EPA',0),'adv_rush_sr_num':float(r.get('SR',0))*car,'adv_carry_share_num':(car/den if den>0 else 0)})
+    rec=week_filter(receiving)
+    if rec is not None and not rec.empty:
+        nc=base._col(rec,'receiver_player_name'); tc=base._col(rec,'pos_team');
+        team_tar=rec.groupby(tc)['Tar'].sum().to_dict() if tc and 'Tar' in rec.columns else {}
+        for _,r in rec.iterrows():
+            team=str(r.get(tc) or ''); tar=float(r.get('Tar',0) or 0); den=float(team_tar.get(team,0) or 0)
+            add(r.get(nc),team,{'adv_targets':tar,'adv_rec':r.get('Rec',0),'adv_rec_yds':r.get('Yds',0),'adv_rec_epa_total':r.get('EPA',0),'adv_rec_sr_num':float(r.get('SR',0))*tar,'adv_target_share_num':(tar/den if den>0 else 0),'adv_rec_airyds':r.get('AirYds',0)})
+    out=[]
+    for d in rows.values():
+        pa=d.get('adv_pass_att',0); rc=d.get('adv_rush_car',0); tg=d.get('adv_targets',0)
+        if pa>0:
+            d['adv_ypa']=d.get('adv_pass_yds',0)/pa; d['adv_pass_epa']=d.get('adv_pass_epa_total',0)/pa; d['adv_pass_sr']=d.get('adv_pass_sr_num',0)/pa; d['adv_cpoe']=d.get('adv_cpoe_num',0)/pa; d['adv_adot']=d.get('adv_airyds',0)/pa
+        if rc>0:
+            d['adv_ypc']=d.get('adv_rush_yds',0)/rc; d['adv_rush_epa']=d.get('adv_rush_epa_total',0)/rc; d['adv_rush_sr']=d.get('adv_rush_sr_num',0)/rc
+        if tg>0:
+            d['adv_catch_rate']=d.get('adv_rec',0)/tg; d['adv_ypt']=d.get('adv_rec_yds',0)/tg; d['adv_rec_epa']=d.get('adv_rec_epa_total',0)/tg; d['adv_rec_sr']=d.get('adv_rec_sr_num',0)/tg; d['adv_rec_adot']=d.get('adv_rec_airyds',0)/tg
+        # carry/target share sums are per game-like aggregate proxies; bound later in model.
+        d['adv_carry_share']=d.get('adv_carry_share_num',0)
+        d['adv_target_share']=d.get('adv_target_share_num',0)
+        out.append(d)
+    return pd.DataFrame(out)
+
+
 def _merge_player_banks(current:pd.DataFrame, previous:pd.DataFrame)->pd.DataFrame:
     cur=current.copy() if current is not None else pd.DataFrame()
     prev=previous.copy() if previous is not None else pd.DataFrame()
@@ -70,6 +120,11 @@ def load_free_stack(year:int, week:int):
     pidx=grab('power_index','power_index')
     betting=grab('betting','betting')
     team_box=grab('team_box','team_box')
+    game_rosters=grab('game_rosters','game_rosters')
+    adv_passing=grab('adv_passing','adv_passing')
+    adv_rushing=grab('adv_rushing','adv_rushing')
+    adv_receiving=grab('adv_receiving','adv_receiving')
+    adv_situational=grab('adv_situational','adv_situational')
     prev_player_box=grab('player_box','player_box',int(year)-1)
     prev_team_box=grab('team_box','team_box',int(year)-1)
     prev_schedule=grab('schedules','cfb_schedule',int(year)-1)
@@ -114,6 +169,12 @@ def load_free_stack(year:int, week:int):
     current_players=base._players(player_box,resolved_week)
     prior_players=base._players(prev_player_box,99)
     players=_merge_player_banks(current_players,prior_players)
+    adv_players=_advanced_player_features(adv_passing,adv_rushing,adv_receiving,resolved_week)
+    if players is not None and not players.empty:
+        players['player_key']=players['player'].astype(str).map(_norm)
+        if adv_players is not None and not adv_players.empty:
+            players=players.merge(adv_players,on='player_key',how='left')
+        players.drop(columns=['player_key'],inplace=True,errors='ignore')
     ctx=base._team_context(schedule,adv,pidx,resolved_week)
 
     # Build NFL-style canonical team aliases from current + prior schedules. The
@@ -165,6 +226,17 @@ def load_free_stack(year:int, week:int):
     # logo, opponent matchup and opportunity baseline.
     roster_map={}
     roster_rows=[]
+    if game_rosters is not None and not game_rosters.empty:
+        gnc=base._col(game_rosters,'athlete_display_name','full_name','player_name')
+        gtc=base._col(game_rosters,'team_display_name','team_short_display_name','team_location')
+        gac=base._col(game_rosters,'active','is_active'); gdc=base._col(game_rosters,'did_not_play')
+        if gnc and gtc:
+            for _,row in game_rosters.iterrows():
+                name=str(row.get(gnc) or '').strip(); team=str(row.get(gtc) or '').strip()
+                if not name or not team:continue
+                if gac and str(row.get(gac)).lower() in {'false','0'}:continue
+                roster_map[_norm(name)]=team
+                roster_rows.append((name,team))
     if roster is not None and not roster.empty:
         nc=base._col(roster,'athlete_display_name','player_name','athlete_name','player','athlete_full_name','full_name')
         tc=base._col(roster,'team_display_name','team_short_display_name','team_location','school','team')
@@ -221,7 +293,9 @@ def load_free_stack(year:int, week:int):
                 'market_total':None if pd.isna(total.loc[i]) else float(total.loc[i])}
 
     bundle={'games':games,'teams':[],'sp':[],'core':[],'srs':[],'elo':[],'rankings':[],'talent':[],
-            'player_stats':[],'advanced':[],'errors':errors,'free_health':health,
+            'player_stats':[],'advanced':[],
+            'advanced_player_health':{'passing':len(adv_passing),'rushing':len(adv_rushing),'receiving':len(adv_receiving),'situational':len(adv_situational)},
+            'current_roster_count':len(roster_map),'errors':errors,'free_health':health,
             'requested_week':int(week),'resolved_week':resolved_week,'available_weeks':available}
     print('CFB_FREE_V20','requested',week,'resolved',resolved_week,'available',available,
           'games',len(games),'players',len(players),'current_players',len(current_players),'prior_players',len(prior_players),

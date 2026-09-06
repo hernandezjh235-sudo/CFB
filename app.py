@@ -16,7 +16,7 @@ from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_mon
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
     local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
 
-APP_VERSION = "CFB Prop Engine v2.3 — NFL-STYLE FINAL + CURRENT ROSTER OPPORTUNITY"
+APP_VERSION = "CFB Prop Engine v2.4 — NFL-STYLE COMPLETE OPPORTUNITY + ADVANCED DATA"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -362,6 +362,9 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     rush_y=sf(player.get("rush_yds"))/gp; rush_att=sf(player.get("rush_att"))/gp
     rec_y=sf(player.get("rec_yds"))/gp; recs=sf(player.get("receptions"))/gp
     pass_td=sf(player.get("pass_td"))/gp; ints=sf(player.get("pass_int"))/gp
+    adv_att=sf(player.get('adv_pass_att')); adv_ypa=sf(player.get('adv_ypa')); adv_cpoe=sf(player.get('adv_cpoe')); adv_pass_epa=sf(player.get('adv_pass_epa'))
+    adv_car=sf(player.get('adv_rush_car')); adv_ypc=sf(player.get('adv_ypc')); adv_rush_epa=sf(player.get('adv_rush_epa')); carry_share=clamp(sf(player.get('adv_carry_share')),0,.92)
+    adv_tar=sf(player.get('adv_targets')); adv_catch=sf(player.get('adv_catch_rate')); adv_ypt=sf(player.get('adv_ypt')); adv_rec_epa=sf(player.get('adv_rec_epa')); target_share=clamp(sf(player.get('adv_target_share')),0,.58)
     sample_source=str(player.get("sample_source") or "current").lower()
     # Opening-week opportunity correction: an active QB/skill prop indicates the
     # player has a meaningful current role, while an old tiny backup sample may not.
@@ -406,7 +409,17 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     if used_team_prior:
         notes.append("opening-week team production baseline")
     if market_label=="Passing Yards":
-        base=pass_y; proj=base*pass_script*pace_adj*snap_adj*pass_match; sd=max(34,0.18*proj)
+        if adv_att>0 and adv_ypa>0 and team_att>0:
+            qb_share=clamp(adv_att/max(team_att,1),.55,1.05)
+            exp_att=team_att*qb_share*pass_script*pace_adj*snap_adj
+            team_ypa=team_pass/max(team_att,1) if team_att>0 else 7.0
+            ypa=.58*adv_ypa+.42*team_ypa
+            eff=clamp(1+adv_cpoe*.20+adv_pass_epa*.07,.92,1.09)
+            proj=exp_att*ypa*eff*pass_match
+            notes.append("attempt share × YPA advanced opportunity")
+        else:
+            base=pass_y; proj=base*pass_script*pace_adj*snap_adj*pass_match
+        sd=max(34,0.20*proj)
     elif market_label=="Pass Attempts":
         proj=pass_att*pass_script*pace_adj*snap_adj; sd=max(4.5,.16*proj)
     elif market_label=="Completions":
@@ -416,14 +429,31 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     elif market_label=="Interceptions":
         proj=max(.03,ints*(1+max(havoc,0)*.025)*(1+.08*max(-team_margin/14,0))); sd=max(.65,math.sqrt(proj))
     elif market_label=="Rushing Yards":
-        proj=rush_y*rush_script*pace_adj*snap_adj*rush_match; sd=max(18,.32*proj)
+        team_rush_att=sf(team_ctx.get('team_rush_att_pg'))
+        if carry_share>0 and adv_ypc>0 and team_rush_att>0:
+            exp_car=team_rush_att*carry_share*rush_script*pace_adj*snap_adj
+            eff=clamp(1+adv_rush_epa*.08,.92,1.08)
+            proj=exp_car*adv_ypc*eff*rush_match
+            notes.append("carry share × YPC advanced opportunity")
+        else: proj=rush_y*rush_script*pace_adj*snap_adj*rush_match
+        sd=max(18,.34*proj)
     elif market_label=="Rush Attempts":
         proj=rush_att*rush_script*pace_adj*snap_adj; sd=max(3.5,.24*proj)
     elif market_label=="Receiving Yards":
-        # Receiver opportunity follows team pass volume/game script; yds/reception carries explosive matchup.
-        proj=rec_y*pass_script*pace_adj*snap_adj*pass_match; sd=max(16,.34*proj)
+        if target_share>0 and adv_ypt>0 and team_att>0:
+            exp_targets=team_att*target_share*pass_script*pace_adj*snap_adj
+            eff=clamp(1+adv_rec_epa*.06,.92,1.08)
+            proj=exp_targets*adv_ypt*eff*pass_match
+            notes.append("target share × YPT advanced opportunity")
+        else: proj=rec_y*pass_script*pace_adj*snap_adj*pass_match
+        sd=max(16,.36*proj)
     elif market_label=="Receptions":
-        proj=recs*pass_script*pace_adj*snap_adj*clamp(.98+.02*pass_match,.90,1.08); sd=max(1.3,.31*proj)
+        if target_share>0 and adv_catch>0 and team_att>0:
+            exp_targets=team_att*target_share*pass_script*pace_adj*snap_adj
+            proj=exp_targets*clamp(adv_catch,.35,.88)*clamp(.98+.02*pass_match,.90,1.08)
+            notes.append("target share × catch rate advanced opportunity")
+        else: proj=recs*pass_script*pace_adj*snap_adj*clamp(.98+.02*pass_match,.90,1.08)
+        sd=max(1.3,.33*proj)
     elif market_label=="Pass + Rush Yards":
         py=pass_y*pass_script*pace_adj*snap_adj*pass_match; ry=rush_y*pace_adj*rush_match
         proj=py+ry; sd=max(40,.18*proj)
@@ -829,13 +859,24 @@ with TAB_PLAYERS:
             # should never print fake 98-100% certainty. Keep direction/edge intact
             # while widening uncertainty until current-season opportunity is proven.
             src=str(pr.get("sample_source") or "fallback").lower(); gp=sf(pr.get("games"),0)
-            if src=="current": pcap=.72 if gp<=1 else (.80 if gp<=3 else .88)
-            elif src=="prior": pcap=.76 if gp>=8 else .70
-            else: pcap=.66
+            roster_confirmed=bool(pr.get('current_team')) or src=='current'
+            transferred=bool(pr.get('current_team') and pr.get('team') and norm_name(pr.get('current_team'))!=norm_name(pr.get('team')))
+            has_adv=any(sf(pr.get(k))>0 for k in ['adv_pass_att','adv_rush_car','adv_targets'])
+            if src=="current": pcap=.74 if gp<=1 else (.82 if gp<=3 else .88)
+            elif src=="prior": pcap=.72 if roster_confirmed else .64
+            elif src=="roster": pcap=.62
+            else: pcap=.62
+            if has_adv and roster_confirmed: pcap=min(.84,pcap+.03)
+            if transferred: pcap=min(pcap,.68)
+            if not roster_confirmed: pcap=min(pcap,.64)
             p=min(max(p,1-pcap),pcap)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status="PLAYABLE" if p>=.60 and proj>0 else "LEAN" if p>=.56 and proj>0 else "TRACK"
-            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(notes)}
+            if src in {'roster','fallback'} and not has_adv: status='TRACK'
+            if transferred: notes.append('transfer/current-role uncertainty')
+            if roster_confirmed: notes.append('current roster confirmed')
+            if has_adv: notes.append('2026 advanced usage available')
+            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes))}
             projected.append(q)
         pdf=pd.DataFrame(projected)
         show=["player","team","prop","side","line","projection","edge","probability","status","notes"]
