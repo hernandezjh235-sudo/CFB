@@ -1,0 +1,27 @@
+name: Probe CFB roster schema
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-roster-columns.yml']
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install pandas pyarrow requests
+      - name: Inspect current roster
+        run: |
+          python - <<'PY'
+          import pandas as pd, requests, re
+          from io import BytesIO
+          u='https://github.com/sportsdataverse/sportsdataverse-data/releases/download/espn_cfb_rosters/cfb_rosters_2026.parquet'
+          r=requests.get(u,timeout=30); r.raise_for_status(); d=pd.read_parquet(BytesIO(r.content))
+          print('COLUMNS',list(d.columns))
+          for q in ['kienholz','pinnick','carr','joseph','chambliss','demond']:
+              mask=pd.Series(False,index=d.index)
+              for c in d.columns:
+                  if d[c].dtype=='object' or str(d[c].dtype).startswith('string'):
+                      mask |= d[c].astype(str).str.lower().str.contains(q,regex=False,na=False)
+              print('MATCH',q,d.loc[mask].head(6).to_dict('records'))
+          PY
