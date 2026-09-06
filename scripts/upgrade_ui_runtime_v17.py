@@ -35,3 +35,4 @@ if needle not in s: raise SystemExit('missing block not found')
 s=s.replace(needle,repl,1)
 
 p.write_text(s)
+# trigger v1.7 workflow
