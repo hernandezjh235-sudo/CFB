@@ -1,0 +1,44 @@
+name: Apply CFB Market Join v2.7
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/fix_market_v27.py'
+      - '.github/workflows/apply-market-v27.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply market join
+        run: python scripts/fix_market_v27.py
+      - name: Syntax check
+        run: python -m py_compile free_data_v16.py
+      - name: Install minimal deps
+        run: pip install pandas pyarrow requests numpy
+      - name: Validate market coverage
+        run: |
+          python - <<'PY'
+          from free_data_v16 import load_free_stack
+          b,c,p,m=load_free_stack(2026,1)
+          print('MARKET_COUNT',len(m))
+          print('MARKET_SAMPLE',list(m.items())[:5])
+          assert len(m)>=40
+          assert any(v.get('market_total') is not None for v in m.values())
+          assert any(v.get('market_home_spread') is not None for v in m.values())
+          PY
+      - name: Commit market fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add free_data_v16.py
+          git commit -m 'Fix CFB v2.7 game spread and total join [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
