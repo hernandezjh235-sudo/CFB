@@ -1,0 +1,59 @@
+name: Apply CFB Integrity v2.8
+on:
+  push:
+    paths:
+      - 'cfb_integrity_v28.py'
+      - 'scripts/upgrade_integrity_v28.py'
+      - '.github/workflows/apply-integrity-v28.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.8
+        run: python scripts/upgrade_integrity_v28.py
+      - name: Syntax check
+        run: python -m py_compile app.py cfb_integrity_v28.py cfb_quality_v27.py cfb_blowout_v26.py cfb_opportunity_v25.py cfb_runtime_v20.py underdog_cfb_v15.py free_data_v16.py
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Integrity smoke
+        run: |
+          python - <<'PY'
+          from cfb_integrity_v28 import integrity_audit,enforce_integrity_status,market_grade_summary,segment_grade_summary,miss_audit
+          import pandas as pd
+          good_live={'away':'A','home':'B'}
+          player={'sample_source':'current','current_team':'A','team':'A','games':2,'starter_current':True,'adv_pass_att':30}
+          game={'away':'A','home':'B','market_total':55.5,'market_home_spread':-3.5}
+          tier,score,flags=integrity_audit(good_live,player,'A','B',game,{},'Passing Yards')
+          print('GOOD',tier,score,flags)
+          assert tier in {'HIGH','MEDIUM'} and 'LIVE EVENT MISMATCH' not in flags
+          bad_live={'away':'X','home':'Y'}
+          low={'sample_source':'prior','current_team':'A','team':'OLD','games':5,'starter_current':False,'adv_targets':0}
+          tier2,score2,flags2=integrity_audit(bad_live,low,'A','B',game,{},'Receiving Yards')
+          st=enforce_integrity_status('PLAYABLE',.72,'LOW',tier2,flags2)
+          print('BAD',tier2,score2,flags2,st)
+          assert st=='TRACK' and 'LIVE EVENT MISMATCH' in flags2
+          df=pd.DataFrame([
+            {'prop':'Passing Yards','result':'WIN','status':'PLAYABLE','quality_tier':'HIGH','integrity_tier':'HIGH','probability':.64},
+            {'prop':'Passing Yards','result':'LOSS','status':'PLAYABLE','quality_tier':'HIGH','integrity_tier':'HIGH','probability':.62},
+            {'prop':'Receiving Yards','result':'WIN','status':'LEAN','quality_tier':'MEDIUM','integrity_tier':'MEDIUM','probability':.58},
+          ])
+          print(market_grade_summary(df).to_dict('records'))
+          assert len(market_grade_summary(df))==2 and len(miss_audit(df))==1
+          PY
+      - name: Commit v2.8
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py
+          git commit -m 'Apply CFB v2.8 integrity gate and grading dashboard [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
