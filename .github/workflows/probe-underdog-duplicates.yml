@@ -18,9 +18,12 @@ jobs:
       - name: Probe duplicate lines
         run: |
           python - <<'PY'
-          from underdog_cfb_v15 import fetch_underdog_cfb_props
-          rows,dbg=fetch_underdog_cfb_props(force=True)
-          for r in rows:
-              if str(r.get('player','')).lower() in {'kevin jennings','ashton daniels'}:
-                  print('PARSED',r)
+          import requests, json
+          url='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
+          h={'User-Agent':'Mozilla/5.0','Accept':'application/json','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
+          j=requests.get(url,headers=h,timeout=20).json()
+          ids={'08c0c1f0-46f6-4621-8d5b-3d19e32e6e44','2dafb711-dcc2-4e0b-925c-dc7e089afaed','01d1fe31-3d8d-4cf3-9b39-5abb2bd9a7d3','ca7fcc6b-ea37-4281-b0ba-02a47cb21fd8','7eb67a23-237d-451c-b33f-40db0031b91f'}
+          for lo in j.get('over_under_lines',[]):
+              if str(lo.get('id')) in ids:
+                  print('TARGET',json.dumps(lo,default=str,sort_keys=True))
           PY
