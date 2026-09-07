@@ -1,0 +1,66 @@
+name: Apply CFB Quality v2.7
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/upgrade_quality_v27.py'
+      - 'cfb_quality_v27.py'
+      - '.github/workflows/apply-quality-v27.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply v2.7
+        run: python scripts/upgrade_quality_v27.py
+      - name: Syntax check
+        run: python -m py_compile app.py cfb_quality_v27.py cfb_blowout_v26.py cfb_opportunity_v25.py cfb_runtime_v20.py underdog_cfb_v15.py free_data_v16.py
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: Live quality smoke
+        run: |
+          python - <<'PY'
+          from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          import free_data_v15 as b
+          # Confirm live CFB book still has event-level away/home metadata.
+          rows,dbg=fetch_underdog_cfb_props(force=True)
+          event_rows=[r for r in rows if r.get('away') and r.get('home')]
+          print('LIVE_ROWS',len(rows),'EVENT_LOCKABLE',len(event_rows))
+          assert len(rows)>20 and len(event_rows)>20
+          # A credible current QB1 may receive an independent team-volume floor.
+          player={'sample_source':'current','current_team':'X','team':'X','games':1,'starter_current':True,'adv_pass_att':28}
+          tc={'team_pass_yds_pg':285,'team_pass_att_pg':36,'team_pass_comp_pg':23}
+          game={'model_home_margin':3,'blowout_prob':.15}
+          p,sd,notes=stabilize_projection(120,34,player,'Passing Yards',tc,game)
+          print('QB_STABILIZED',p,sd,notes)
+          assert p>120 and 'QB1 team-volume floor' in notes
+          # A low-evidence receiving projection with an absurd edge must not be PLAYABLE.
+          low={'sample_source':'prior','current_team':'New','team':'Old','games':5,'starter_current':False,'adv_targets':0}
+          cp,cap,qn,tier=calibrate_probability(.999,low,'Receiving Yards',{},game,3,75)
+          status=status_from_quality(cp,3,tier,'Receiving Yards',low)
+          print('LOW_ROLE',cp,cap,tier,status,qn)
+          assert cap<=.56 and status=='TRACK'
+          # Probe free betting schema so missing totals/spreads are visible in CI.
+          try:
+              bet=b._parquet('betting',2026,'betting')
+              print('BETTING_ROWS',len(bet),'BETTING_COLS',list(bet.columns))
+              print('BETTING_SAMPLE',bet.head(2).to_dict('records'))
+          except Exception as e:
+              print('BETTING_PROBE_ERROR',repr(e))
+          PY
+      - name: Commit v2.7
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py
+          git commit -m 'Apply CFB v2.7 live-game lock and quality calibration [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
