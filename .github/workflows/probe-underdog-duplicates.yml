@@ -1,5 +1,8 @@
 name: Probe Underdog Duplicate CFB Lines
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/probe-underdog-duplicates.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,7 +18,7 @@ jobs:
       - name: Probe duplicate lines
         run: |
           python - <<'PY'
-          import requests, collections, json
+          import requests, json
           url='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
           h={'User-Agent':'Mozilla/5.0','Accept':'application/json','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
           j=requests.get(url,headers=h,timeout=20).json()
@@ -30,8 +33,6 @@ jobs:
               name=p.get('display_name') or p.get('full_name') or lo.get('player_name') or ''
               if 'kevin jennings' in str(name).lower() or 'ashton daniels' in str(name).lower():
                   print('PLAYER',name)
-                  keep={k:lo.get(k) for k in lo.keys() if k not in {'options'}}
-                  print('LINE',json.dumps(keep,default=str,sort_keys=True))
-                  print('OPTIONS',json.dumps(lo.get('options'),default=str,sort_keys=True))
+                  print('LINE',json.dumps(lo,default=str,sort_keys=True))
                   print('STAT',json.dumps(stat,default=str,sort_keys=True))
           PY
