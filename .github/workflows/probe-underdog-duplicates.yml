@@ -22,17 +22,7 @@ jobs:
           url='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
           h={'User-Agent':'Mozilla/5.0','Accept':'application/json','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
           j=requests.get(url,headers=h,timeout=20).json()
-          players={str(x.get('id')):x for x in j.get('players',[]) if isinstance(x,dict)}
-          apps={str(x.get('id')):x for x in j.get('appearances',[]) if isinstance(x,dict)}
-          for lo in j.get('over_under_lines',[]):
-              ou=lo.get('over_under') or {}; stat=ou.get('appearance_stat') or {}
-              aid=stat.get('appearance_id') or ou.get('appearance_id') or lo.get('appearance_id')
-              app=apps.get(str(aid),{})
-              pid=app.get('player_id') or stat.get('player_id') or ou.get('player_id') or lo.get('player_id')
-              p=players.get(str(pid),{})
-              name=p.get('display_name') or p.get('full_name') or lo.get('player_name') or ''
-              if 'kevin jennings' in str(name).lower() or 'ashton daniels' in str(name).lower():
-                  print('PLAYER',name)
-                  print('LINE',json.dumps(lo,default=str,sort_keys=True))
-                  print('STAT',json.dumps(stat,default=str,sort_keys=True))
+          print('COUNTS', {k:len(v) for k,v in j.items() if isinstance(v,list)})
+          for i,lo in enumerate(j.get('over_under_lines',[])[:8]):
+              print('RAW',i,json.dumps(lo,default=str,sort_keys=True))
           PY
