@@ -1,0 +1,48 @@
+name: Apply CFB Parser Data v2.9
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-parser-data-v29.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v2.9
+        run: python scripts/fix_parser_datareadiness_v29.py
+      - name: Syntax check
+        run: python -m py_compile app.py underdog_cfb_v15.py
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Live parser smoke
+        run: |
+          python - <<'PY'
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          rows,dbg=fetch_underdog_cfb_props(force=True)
+          print('ROWS',len(rows))
+          # Impossible classifications seen in the UI must be gone.
+          bad=[]
+          for r in rows:
+              p=r.get('prop'); line=float(r.get('line') or 0)
+              if p=='Passing Yards' and line<20: bad.append(r)
+              if p=='Rushing Yards' and line>180: bad.append(r)
+              if p=='Interceptions' and line>5: bad.append(r)
+          print('BAD',bad[:10])
+          assert len(rows)>20
+          assert not bad
+          print('SAMPLE',[r for r in rows if r.get('player') in {'Kevin Jennings','Ashton Daniels'}][:12])
+          PY
+      - name: Commit v2.9
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py underdog_cfb_v15.py
+          git commit -m 'Apply CFB v2.9 parser and data-readiness fixes [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
