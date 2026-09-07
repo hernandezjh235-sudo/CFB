@@ -38,9 +38,17 @@ def _blob(x):
     if isinstance(x,list):return ' '.join(_blob(v) for v in x).lower()
     return str(x or '').lower()
 def _canon(label):
-    text=re.sub(r'\s+',' ',str(label or '').strip().lower())
+    # Exact market matching only. Specialty yes/no markets such as
+    # 'Game High Pass Yards' or '1+ Pass TDs in Each Half' must NOT be fed
+    # into the ordinary Passing Yards/Passing TD formulas. The old substring
+    # matcher also turned Fantasy Points into Interceptions ('points' contains
+    # 'ints') and combo stats into component stats.
+    def norm_phrase(x):
+        return re.sub(r'[^a-z0-9]+',' ',str(x or '').lower()).strip()
+    nt=norm_phrase(label)
     for canon,als in PROP_ALIASES.items():
-        if any(a in text for a in als):return canon
+        for alias in [canon]+list(als):
+            if nt==norm_phrase(alias):return canon
     return None
 def _cfb_blob(*objs):
     b=' '+ ' '.join(_blob(o) for o in objs)+' '
@@ -70,7 +78,8 @@ def _game_names(g):
 
 def _line_row(name,team,prop,line,source_url,game=None,line_obj=None,event_id=''):
     game=game or {}; line_obj=line_obj or {}; away,home,matchup=_game_names(game)
-    return {'player':name,'team':team,'prop':prop,'line':float(line),'side':'AUTO','source':'Underdog','source_url':source_url,'away':away,'home':home,'matchup':matchup,'event_id':str(event_id or game.get('id') or ''),'underdog_id':str(line_obj.get('id') or ''),'line_status':line_obj.get('status') or '','scheduled_at':game.get('scheduled_at') or game.get('starts_at') or game.get('start_time')}
+    ou=line_obj.get('over_under') if isinstance(line_obj.get('over_under'),dict) else {}
+    return {'player':name,'team':team,'prop':prop,'line':float(line),'side':'AUTO','source':'Underdog','source_url':source_url,'away':away,'home':home,'matchup':matchup,'event_id':str(event_id or game.get('id') or ''),'underdog_id':str(line_obj.get('id') or ''),'line_status':line_obj.get('status') or '','scheduled_at':game.get('scheduled_at') or game.get('starts_at') or game.get('start_time'),'line_type':str(line_obj.get('line_type') or ''),'non_discounted_line':_num(line_obj.get('non_discounted_stat_value')),'has_alternates':bool(ou.get('has_alternates'))}
 
 def _native(data,url):
     if not isinstance(data,dict):return []

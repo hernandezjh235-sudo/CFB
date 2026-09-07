@@ -20,7 +20,7 @@ from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player
 from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
 from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_grade_summary, segment_grade_summary, miss_audit
 
-APP_VERSION = "CFB Prop Engine v2.8 — LIVE EVENT LOCK + ROLE INTEGRITY + GRADE AUDIT"
+APP_VERSION = "CFB Prop Engine v2.9 — PROP PARSER CLEAN + TRUE DATA READINESS"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -830,7 +830,7 @@ with TAB_PLAYERS:
                 st.markdown(f"<div class='cfb-live-strip'><b>LIVE BOARD CONNECTED</b> · {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}</div>",unsafe_allow_html=True)
             if prop_rows:
                 rawdf=pd.DataFrame(prop_rows)
-                rawcols=[c for c in ["player","team","matchup","prop","line","line_status","scheduled_at"] if c in rawdf.columns]
+                rawcols=[c for c in ["player","team","matchup","prop","line","line_type","non_discounted_line","line_status","scheduled_at"] if c in rawdf.columns]
                 with st.expander("📡 Live player lines",expanded=True):
                     st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
@@ -978,9 +978,32 @@ with TAB_DATA:
     if brand_health.get("missing"):
         st.caption("Missing logo aliases: "+", ".join(brand_health["missing"][:12]))
     checks=[]
-    for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
-        v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
-            "games":"schedule/results/game counts","teams":"FBS identity/logos/colors/conference","sp":"offense/defense/pass/rush/explosive/havoc/pace","core":"opponent-relative team efficiency","srs":"schedule-adjusted power","elo":"team strength","rankings":"AP/CFP context","talent":"roster talent gap/blowout context","player_stats":"QB/RB/WR season production/usage","advanced":"advanced efficiency context"}[k]})
+    if str(data_mode).startswith('FREE'):
+        fh=bundle.get('free_health',{}) or {}
+        # Show the real no-key datasets actually feeding the model. The legacy
+        # CFBD-shaped bundle intentionally keeps several placeholder lists empty,
+        # which previously made healthy free data look like Rows=0.
+        free_layers=[
+            ('schedule/results',fh.get('schedules',len(bundle.get('games',[]))),'game schedule/results'),
+            ('team context',len(ctx),'team identity + derived matchup context'),
+            ('player production',len(players) if players is not None else 0,'QB/RB/WR current + prior + roster bank'),
+            ('advanced passing',fh.get('adv_passing',0),'QB usage/efficiency'),
+            ('advanced rushing',fh.get('adv_rushing',0),'carry share/efficiency'),
+            ('advanced receiving',fh.get('adv_receiving',0),'targets/air yards/efficiency'),
+            ('situational',fh.get('adv_situational',0),'down/distance/red-zone context'),
+            ('team box',fh.get('team_box',0),'plays/turnovers/possession/efficiency'),
+            ('game rosters',fh.get('game_rosters',0),'starter/current-game role'),
+            ('current rosters',fh.get('rosters',0),'current-team identity'),
+            ('power index',fh.get('power_index',0),'team strength/rating context'),
+            ('betting',fh.get('betting',0),'spread + total context'),
+            ('drives',fh.get('v25_drives',fh.get('drives',0)),'drive/pace/scoring opportunity'),
+        ]
+        for name,rows,role in free_layers:
+            checks.append({'Layer':name,'Rows':int(rows or 0),'Ready':bool(rows),'Role':role})
+    else:
+        for k in ["games","teams","sp","core","srs","elo","rankings","talent","player_stats","advanced"]:
+            v=bundle.get(k,[]); checks.append({"Layer":k,"Rows":len(v) if isinstance(v,list) else 0,"Ready":bool(v),"Role":{
+                "games":"schedule/results/game counts","teams":"FBS identity/logos/colors/conference","sp":"offense/defense/pass/rush/explosive/havoc/pace","core":"opponent-relative team efficiency","srs":"schedule-adjusted power","elo":"team strength","rankings":"AP/CFP context","talent":"roster talent gap/blowout context","player_stats":"QB/RB/WR season production/usage","advanced":"advanced efficiency context"}[k]})
     st.dataframe(pd.DataFrame(checks),width="stretch",hide_index=True)
     st.markdown("**Game-week context adapters**")
     st.dataframe(pd.DataFrame([
