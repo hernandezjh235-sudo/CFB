@@ -10,24 +10,17 @@ old="""def _canon(label):
     return None
 """
 new="""def _canon(label):
-    # Exact/token-aware matching only. The old substring matcher could turn
-    # 'Fantasy Points' into Interceptions because 'points' contains 'ints',
-    # and could collapse combo stats into component stats. Match normalized
-    # complete phrases first, then whole-token phrases longest-first.
-    text=re.sub(r'\\s+',' ',str(label or '').strip().lower())
+    # Exact market matching only. Specialty yes/no markets such as
+    # 'Game High Pass Yards' or '1+ Pass TDs in Each Half' must NOT be fed
+    # into the ordinary Passing Yards/Passing TD formulas. The old substring
+    # matcher also turned Fantasy Points into Interceptions ('points' contains
+    # 'ints') and combo stats into component stats.
     def norm_phrase(x):
         return re.sub(r'[^a-z0-9]+',' ',str(x or '').lower()).strip()
-    nt=norm_phrase(text)
-    candidates=[]
+    nt=norm_phrase(label)
     for canon,als in PROP_ALIASES.items():
         for alias in [canon]+list(als):
-            na=norm_phrase(alias)
-            if not na: continue
-            if nt==na: return canon
-            candidates.append((len(na.split()),len(na),canon,na))
-    padded=f' {nt} '
-    for _tok,_ln,canon,na in sorted(candidates,reverse=True):
-        if f' {na} ' in padded:return canon
+            if nt==norm_phrase(alias):return canon
     return None
 """
 if old not in s:
@@ -46,7 +39,6 @@ p.write_text(s)
 p=Path('app.py')
 s=p.read_text()
 s=s.replace('APP_VERSION = "CFB Prop Engine v2.8 — LIVE EVENT LOCK + ROLE INTEGRITY + GRADE AUDIT"','APP_VERSION = "CFB Prop Engine v2.9 — PROP PARSER CLEAN + TRUE DATA READINESS"')
-# Backward-safe in case deployed file still has old version string.
 s=s.replace('APP_VERSION = "CFB Prop Engine v2.6 — COACH-AWARE BLOWOUT + COMPLETE OPPORTUNITY"','APP_VERSION = "CFB Prop Engine v2.9 — PROP PARSER CLEAN + TRUE DATA READINESS"')
 old="""    checks=[]
     for k in [\"games\",\"teams\",\"sp\",\"core\",\"srs\",\"elo\",\"rankings\",\"talent\",\"player_stats\",\"advanced\"]:
@@ -86,7 +78,6 @@ new="""    checks=[]
 if old not in s:
     raise SystemExit('data readiness block not found')
 s=s.replace(old,new)
-# Surface line metadata in the live table so alternates/promos are obvious.
 s=s.replace('[\"player\",\"team\",\"matchup\",\"prop\",\"line\",\"line_status\",\"scheduled_at\"]','[\"player\",\"team\",\"matchup\",\"prop\",\"line\",\"line_type\",\"non_discounted_line\",\"line_status\",\"scheduled_at\"]')
 p.write_text(s)
 print('v2.9 parser/data-readiness fixes applied')
