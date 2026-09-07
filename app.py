@@ -18,8 +18,9 @@ from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_sc
 from cfb_opportunity_v25 import enrich_opportunity, automatic_weather
 from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player_blowout_modifier
 from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
+from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_grade_summary, segment_grade_summary, miss_audit
 
-APP_VERSION = "CFB Prop Engine v2.6 — COACH-AWARE BLOWOUT + COMPLETE OPPORTUNITY"
+APP_VERSION = "CFB Prop Engine v2.8 — LIVE EVENT LOCK + ROLE INTEGRITY + GRADE AUDIT"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -924,6 +925,11 @@ with TAB_PLAYERS:
             notes.extend(qprob_notes)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status=status_from_quality(p,proj,quality_tier,r.get("prop"),model_pr)
+            integrity_tier,integrity_score,integrity_flags=integrity_audit(r,model_pr,team,opp,row_game,tc,r.get("prop"))
+            status=enforce_integrity_status(status,p,quality_tier,integrity_tier,integrity_flags)
+            if integrity_flags:
+                notes.append('integrity: '+', '.join(integrity_flags))
+            notes.append(f'data integrity {integrity_tier.lower()}')
             src=str(model_pr.get("sample_source") or "fallback").lower(); gp=sf(model_pr.get("games"),0)
             roster_confirmed=bool(model_pr.get('current_team')) or src=='current'
             transferred=bool(model_pr.get('current_team') and model_pr.get('team') and norm_name(model_pr.get('current_team'))!=norm_name(model_pr.get('team')))
@@ -935,10 +941,11 @@ with TAB_PLAYERS:
             _bm,_bsd,_bn,starter_retention=player_blowout_modifier(model_pr,r.get("prop"),row_game,team or "",tc)
             q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes)),
                "blowout_level":row_game.get("blowout_level","LOW"),"blowout_prob":row_game.get("blowout_prob",0),"starter_retention":starter_retention,"backup_opportunity":row_game.get("backup_opportunity",0),
-               "quality_tier":quality_tier,"probability_cap":pcap,"live_game_locked":bool(r.get("away") and r.get("home"))}
+               "quality_tier":quality_tier,"probability_cap":pcap,"live_game_locked":bool(r.get("away") and r.get("home")),
+               "integrity_tier":integrity_tier,"integrity_score":integrity_score,"integrity_flags":" | ".join(integrity_flags)}
             projected.append(q)
         pdf=pd.DataFrame(projected)
-        show=["player","team","prop","side","line","projection","edge","probability","status","notes"]
+        show=["player","team","prop","side","line","projection","edge","probability","status","quality_tier","integrity_tier","integrity_flags","notes"]
         if not pdf.empty:
             ranked=sorted(projected,key=lambda x:sf(x.get("probability")),reverse=True)
             good_ranked=[x for x in ranked if sf(x.get("projection"))>0]
@@ -988,7 +995,7 @@ with TAB_DATA:
         st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
     st.markdown("**Current architecture**")
-    st.code("SportsDataverse/NCAA + current rosters + drives + game rosters + advanced QB/RB/WR + situational/red-zone + Open-Meteo + Underdog event lock → opportunity/hook/pressure/explosive engine → QB volume floor + role-quality calibration → Higher/Lower probability + edge → save/grade",language="text")
+    st.code("SportsDataverse/NCAA + current rosters + drives + game rosters + advanced QB/RB/WR + situational/red-zone + Open-Meteo + Underdog event lock → opportunity/hook/pressure/explosive engine → QB volume floor + role-quality calibration → data-integrity gate → Higher/Lower probability + edge → market-by-market grading + miss audit",language="text")
     st.caption("Injuries/depth charts are intentionally a separate adapter layer. CFB availability reporting is inconsistent, so the app does not pretend missing injury data means healthy.")
 
 with TAB_GRADE:
@@ -1007,13 +1014,33 @@ with TAB_GRADE:
                 gdf=pd.DataFrame(graded)
                 wins=(gdf.result=="WIN").sum(); losses=(gdf.result=="LOSS").sum(); pushes=(gdf.result=="PUSH").sum()
                 st.metric("Record",f"{wins}-{losses}"+(f"-{pushes}" if pushes else ""))
-                st.dataframe(gdf[["player","prop","side","line","projection","probability","actual","result"]],width="stretch",hide_index=True)
+                st.dataframe(gdf[[c for c in ["player","prop","side","line","projection","probability","status","quality_tier","integrity_tier","actual","result"] if c in gdf.columns]],width="stretch",hide_index=True)
+                st.markdown("**Market performance**")
+                ms=market_grade_summary(gdf)
+                if not ms.empty: st.dataframe(ms,width="stretch",hide_index=True)
+                cga,cgb,cgc=st.columns(3)
+                with cga:
+                    st.markdown("**By status**"); ss=segment_grade_summary(gdf,'status')
+                    if not ss.empty: st.dataframe(ss,width="stretch",hide_index=True)
+                with cgb:
+                    st.markdown("**By projection quality**"); qs=segment_grade_summary(gdf,'quality_tier')
+                    if not qs.empty: st.dataframe(qs,width="stretch",hide_index=True)
+                with cgc:
+                    st.markdown("**By data integrity**"); ins=segment_grade_summary(gdf,'integrity_tier')
+                    if not ins.empty: st.dataframe(ins,width="stretch",hide_index=True)
+                misses=miss_audit(gdf)
+                if not misses.empty:
+                    with st.expander(f"❌ Loss audit ({len(misses)})",expanded=True): st.dataframe(misses,width="stretch",hide_index=True)
                 if st.button("Append to graded history"):
                     old=pd.read_csv(hist_path) if hist_path.exists() else pd.DataFrame()
                     pd.concat([old,gdf],ignore_index=True).to_csv(hist_path,index=False); st.success("Graded history updated.")
         else: st.error("CSV needs player, prop, actual columns.")
     if hist_path.exists():
         h=pd.read_csv(hist_path); st.caption(f"Historical graded rows: {len(h)}")
-        if len(h): st.dataframe(h.tail(100),width="stretch",hide_index=True)
+        if len(h):
+            hm=market_grade_summary(h)
+            if not hm.empty:
+                st.markdown("**Historical market win rates**"); st.dataframe(hm,width="stretch",hide_index=True)
+            st.dataframe(h.tail(100),width="stretch",hide_index=True)
 
 st.caption("Model note: projections are estimates, not guarantees. Early-season CFB samples are noisy; the app exposes data readiness and avoids manufacturing missing inputs.")
