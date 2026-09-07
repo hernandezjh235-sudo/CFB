@@ -18,11 +18,9 @@ jobs:
       - name: Probe duplicate lines
         run: |
           python - <<'PY'
-          import requests, json
-          url='https://api.underdogfantasy.com/beta/v6/over_under_lines?sport_id=cfb'
-          h={'User-Agent':'Mozilla/5.0','Accept':'application/json','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com'}
-          j=requests.get(url,headers=h,timeout=20).json()
-          print('COUNTS', {k:len(v) for k,v in j.items() if isinstance(v,list)})
-          for i,lo in enumerate(j.get('over_under_lines',[])[:8]):
-              print('RAW',i,json.dumps(lo,default=str,sort_keys=True))
+          from underdog_cfb_v15 import fetch_underdog_cfb_props
+          rows,dbg=fetch_underdog_cfb_props(force=True)
+          for r in rows:
+              if str(r.get('player','')).lower() in {'kevin jennings','ashton daniels'}:
+                  print('PARSED',r)
           PY
