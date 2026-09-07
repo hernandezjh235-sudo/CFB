@@ -26,7 +26,6 @@ jobs:
           from underdog_cfb_v15 import fetch_underdog_cfb_props
           rows,dbg=fetch_underdog_cfb_props(force=True)
           print('ROWS',len(rows))
-          # Impossible classifications seen in the UI must be gone.
           bad=[]
           for r in rows:
               p=r.get('prop'); line=float(r.get('line') or 0)
@@ -46,3 +45,4 @@ jobs:
           git commit -m 'Apply CFB v2.9 parser and data-readiness fixes [skip ci]' || exit 0
           git pull --rebase origin main
           git push
+# rerun after exact-only specialty-market fix
