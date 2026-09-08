@@ -1,0 +1,64 @@
+name: Apply CFB v3.0 Role + Upset
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-v30-role-upset.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.0
+        run: python scripts/apply_v30_role_upset.py
+      - name: Syntax check
+        run: python -m py_compile app.py cfb_role_v30.py cfb_quality_v27.py cfb_blowout_v26.py
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Role engine smoke
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from cfb_role_v30 import enrich_role_depth,role_adjust_projection,qb_upset_margin_delta
+          from cfb_quality_v27 import calibrate_probability,status_from_quality
+          p=pd.DataFrame([
+            {'player':'QB1','current_team':'A','position':'QB','adv_pass_att':30,'adv_rush_car':6,'adv_ypc':6.0,'adv_carry_share':.12,'starter_current':True,'sample_source':'current','games':1},
+            {'player':'RB1','current_team':'A','position':'RB','adv_rush_car':22,'adv_ypc':5.3,'adv_carry_share':.49,'starter_current':True,'sample_source':'current','games':1},
+            {'player':'RB2','current_team':'A','position':'RB','adv_rush_car':7,'adv_ypc':3.4,'adv_carry_share':.16,'sample_source':'current','games':1},
+            {'player':'WR1','current_team':'A','position':'WR','adv_targets':8,'adv_target_share':.24,'air_yard_share':.30,'sample_source':'current','games':1},
+            {'player':'WR4','current_team':'A','position':'WR','adv_targets':2,'adv_target_share':.05,'air_yard_share':.04,'sample_source':'current','games':1},
+          ])
+          e=enrich_role_depth(p)
+          print(e[['player','carry_role_rank','target_role_rank','rush_role_label','target_role_label','role_depth_conf']])
+          qb=e[e.player=='QB1'].iloc[0].to_dict(); rb1=e[e.player=='RB1'].iloc[0].to_dict(); wr4=e[e.player=='WR4'].iloc[0].to_dict()
+          qproj,_,qn=role_adjust_projection(3.5,19,qb,'Rushing Yards')
+          rproj,_,rn=role_adjust_projection(60,24,rb1,'Rushing Yards')
+          wproj,_,wn=role_adjust_projection(50,20,wr4,'Receiving Yards')
+          print('QB',qproj,qn,'RB1',rproj,rn,'WR4',wproj,wn)
+          assert qproj>3.5
+          assert rproj>=60
+          assert wproj<50
+          raw=.90
+          cp,cap,notes,tier=calibrate_probability(raw,wr4,'Receiving Yards',{}, {'model_home_margin':4,'blowout_prob':.2}, wproj,30)
+          st=status_from_quality(cp,wproj,tier,'Receiving Yards',wr4)
+          print('WR4 quality',cp,cap,tier,st,notes)
+          assert cp<=.74 and st=='TRACK'
+          h={'team_ypa_adv':6.2,'score_drive_rate':.30,'passing_down_epa':-.1,'sack_rate_allowed':.08,'team_adot':7.0,'def_passing':0,'def_expl':0}
+          a={'team_ypa_adv':9.5,'score_drive_rate':.48,'passing_down_epa':.35,'sack_rate_allowed':.03,'team_adot':11.0,'def_passing':0,'def_expl':0}
+          d,n=qb_upset_margin_delta(h,a)
+          print('upset delta',d,n)
+          assert d<0
+          PY
+      - name: Commit v3.0
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_quality_v27.py cfb_blowout_v26.py
+          git commit -m 'Apply CFB v3.0 role-depth and QB-upset repairs [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
