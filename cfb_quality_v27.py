@@ -32,16 +32,26 @@ def projection_quality(player:dict, market:str, team_ctx:dict, game:dict) -> Tup
     adv_pass=_num(player.get('adv_pass_att'))
     adv_tar=_num(player.get('adv_targets'))
     adv_car=_num(player.get('adv_rush_car'))
+    carry_rank=int(_num(player.get('carry_role_rank')))
+    target_rank=int(_num(player.get('target_role_rank')))
+    carry_share=_num(player.get('adv_carry_share'))
+    target_share=_num(player.get('adv_target_share'))
+    role_depth=_num(player.get('role_depth_conf'))
     notes=[]
 
     if market in PASS_MARKETS:
         role=1.0 if adv_pass>=15 else (.90 if starter else (.78 if src=='current' else .66))
     elif market in REC_MARKETS:
-        role=1.0 if adv_tar>=4 else (.88 if adv_tar>0 else (.76 if src=='current' and gp>=2 else .58))
+        role=1.0 if (adv_tar>=4 and target_rank in (1,2,3)) else (.88 if adv_tar>0 else (.76 if src=='current' and gp>=2 else .58))
+        if (target_rank>=4 or (adv_tar<4 and target_share<.08)) and target_share<.10: role*=.82; notes.append('depth target role')
+        elif target_rank in (1,2) and target_share>=.15: role=min(1.0,role+.04)
     elif market in RUSH_MARKETS:
-        role=1.0 if adv_car>=6 else (.88 if adv_car>0 else (.76 if src=='current' and gp>=2 else .62))
+        role=1.0 if (adv_car>=6 and (carry_rank in (1,2) or adv_pass>=10)) else (.88 if adv_car>0 else (.76 if src=='current' and gp>=2 else .62))
+        if (carry_rank>=3 or (adv_car<6 and carry_share<.14)) and carry_share<.16 and adv_pass<10: role*=.82; notes.append('committee/depth carry role')
+        elif carry_rank==1 and carry_share>=.28: role=min(1.0,role+.04)
     else:
         role=.82 if src=='current' else .70
+    if role_depth>0: role=.82*role+.18*role_depth
 
     if transferred and not ((market in PASS_MARKETS and adv_pass>0) or (market in REC_MARKETS and adv_tar>0) or (market in RUSH_MARKETS and adv_car>0)):
         role*=.72; notes.append('transfer role not yet supported by current usage')
@@ -58,6 +68,8 @@ def projection_quality(player:dict, market:str, team_ctx:dict, game:dict) -> Tup
 
     rel=_clamp(.48+.50*role,.56,.98)
     pcap=_clamp(.54+.30*role,.56,.86)
+    if gp<=1 and src=='current' and market in REC_MARKETS|RUSH_MARKETS:
+        pcap=min(pcap,.74); notes.append('one-game role confidence cap')
     tier='HIGH' if role>=.88 else ('MEDIUM' if role>=.70 else 'LOW')
     if tier=='LOW': notes.append('role certainty low')
     return rel,pcap,notes,tier
@@ -125,6 +137,10 @@ def status_from_quality(p:float, proj:float, tier:str, market:str, player:dict) 
     if tier=='LOW':return 'TRACK'
     if market in REC_MARKETS and _num(player.get('adv_targets'))<=0 and str(player.get('sample_source') or '').lower()!='current':
         return 'TRACK'
+    if market in REC_MARKETS and ((int(_num(player.get('target_role_rank')))>=4 and _num(player.get('adv_target_share'))<.10) or (_num(player.get('adv_targets'))<4 and _num(player.get('adv_target_share'))<.08)):
+        return 'TRACK'
     if market in RUSH_MARKETS and _num(player.get('adv_rush_car'))<=0 and str(player.get('sample_source') or '').lower()!='current':
+        return 'TRACK'
+    if market in RUSH_MARKETS and (((int(_num(player.get('carry_role_rank')))>=3 and _num(player.get('adv_carry_share'))<.16) or (_num(player.get('adv_rush_car'))<6 and _num(player.get('adv_carry_share'))<.14)) and _num(player.get('adv_pass_att'))<10):
         return 'TRACK'
     return 'PLAYABLE' if p>=.60 and tier=='HIGH' else ('LEAN' if p>=.56 else 'TRACK')

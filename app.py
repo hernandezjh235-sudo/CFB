@@ -19,8 +19,9 @@ from cfb_opportunity_v25 import enrich_opportunity, automatic_weather
 from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player_blowout_modifier
 from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
 from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_grade_summary, segment_grade_summary, miss_audit
+from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 
-APP_VERSION = "CFB Prop Engine v2.9 — PROP PARSER CLEAN + TRUE DATA READINESS"
+APP_VERSION = "CFB Prop Engine v3.0 — ROLE DEPTH + QB RUSH + UPSET PATH"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -280,6 +281,11 @@ def project_game(away:str,home:str,ctx:dict,market:dict|None=None,neutral=False)
     power_gap=(sf(h.get("power_z"))-sf(a.get("power_z")))*2.8
     hfa=0 if neutral else 2.25
     model_margin=.44*sp_gap+.22*srs_gap+.16*core_gap+.08*elo_gap+.10*power_gap+hfa
+    # v3.0: bounded explosive-QB upset path. Team power still anchors the game,
+    # but a major passing-efficiency/explosive mismatch can materially narrow or
+    # widen the margin instead of being buried by roster/power ratings.
+    upset_delta,upset_notes=qb_upset_margin_delta(h,a)
+    model_margin+=upset_delta
     # Market is a low-weight audit/stabilizer, never the driver.
     if market.get("market_home_spread") is not None:
         market_margin=-sf(market["market_home_spread"])
@@ -309,7 +315,8 @@ def project_game(away:str,home:str,ctx:dict,market:dict|None=None,neutral=False)
     # mismatch + underdog drive sustainability + turnover risk + historical coach hook.
     blow_profile=game_blowout_profile({"away":away,"home":home,"model_home_margin":model_margin,"model_total":total,"favorite":favorite},h,a)
     blowout_p=sf(blow_profile.get("blowout_prob"))
-    tags=[]
+    tags=list(upset_notes)
+    if abs(upset_delta)>=2.5: tags.append('⚡ QB UPSET PATH')
     pass_funnel_home = sf(a.get("def_passing"))-sf(a.get("def_rushing"))
     pass_funnel_away = sf(h.get("def_passing"))-sf(h.get("def_rushing"))
     if total>=61: tags.append("🔥 SHOOTOUT")
@@ -320,7 +327,7 @@ def project_game(away:str,home:str,ctx:dict,market:dict|None=None,neutral=False)
             "market_home_spread":market.get("market_home_spread"),"market_total":market.get("market_total"),"home_ap":h.get("ap_rank"),"away_ap":a.get("ap_rank"),"home_model_rank":h.get("model_rank"),"away_model_rank":a.get("model_rank"),
             "blowout_level":blow_profile.get("blowout_level"),"coach_hook_aggression":blow_profile.get("coach_hook_aggression"),
             "qb_starter_retention":blow_profile.get("qb_starter_retention"),"wr1_retention":blow_profile.get("wr1_retention"),"rb1_retention":blow_profile.get("rb1_retention"),
-            "backup_opportunity":blow_profile.get("backup_opportunity"),"underdog_catchup_mult":blow_profile.get("underdog_catchup_mult"),"blowout_components":blow_profile.get("blowout_components",{})}
+            "backup_opportunity":blow_profile.get("backup_opportunity"),"underdog_catchup_mult":blow_profile.get("underdog_catchup_mult"),"blowout_components":blow_profile.get("blowout_components",{}),"qb_upset_margin_delta":upset_delta,"qb_upset_notes":upset_notes}
 
 
 def parse_player_stats(rows:list, games_played:dict)->pd.DataFrame:
@@ -494,6 +501,11 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
         proj=max(.02,(sf(player.get("pass_td"))+sf(player.get("rush_td"))+sf(player.get("rec_td")))/gp*(game.get("model_total",55)/55)*snap_adj*scoring_env); sd=max(.7,math.sqrt(proj))
     else:
         proj=0; sd=1
+    # v3.0 current-role allocation: carry/target hierarchy and QB rushing are
+    # applied before game-state/blowout modifiers. This uses observed opportunity,
+    # never the sportsbook line, and stays bounded to avoid one-game overfitting.
+    proj,sd,role_notes=role_adjust_projection(proj,sd,player,market_label)
+    notes.extend(role_notes)
     # Final mean/variance adjustment comes from the dedicated game-state engine.
     # It is position/market aware: favorite QB/WR hook, RB early-volume vs late hook,
     # backup rushing opportunity, and underdog catch-up passing/targets.
@@ -676,6 +688,7 @@ with st.spinner("Loading FREE CFB data…"):
     # v2.5: enrich both free and optional-CFBD modes with the same no-key CFB
     # drive/opportunity context. This layer never uses the sportsbook line to set a projection.
     ctx,players,opportunity_health=enrich_opportunity(int(year),int(bundle.get("resolved_week",week) if isinstance(bundle,dict) else week),ctx,players)
+    players=enrich_role_depth(players)
     # v2.6 derives coach/rotation behavior from prior-season 21+ point games.
     # It measures starter concentration rather than inventing a universal substitution rule.
     ctx,blowout_health=enrich_blowout_context(int(year),ctx)
