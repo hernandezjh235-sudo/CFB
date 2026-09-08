@@ -1,4 +1,5 @@
 name: Apply CFB v3.0 Role + Upset
+# rerun after low-share depth-role tightening
 on:
   push:
     branches: [main]
@@ -43,8 +44,7 @@ jobs:
           assert qproj>3.5
           assert rproj>=60
           assert wproj<50
-          raw=.90
-          cp,cap,notes,tier=calibrate_probability(raw,wr4,'Receiving Yards',{}, {'model_home_margin':4,'blowout_prob':.2}, wproj,30)
+          cp,cap,notes,tier=calibrate_probability(.90,wr4,'Receiving Yards',{}, {'model_home_margin':4,'blowout_prob':.2}, wproj,30)
           st=status_from_quality(cp,wproj,tier,'Receiving Yards',wr4)
           print('WR4 quality',cp,cap,tier,st,notes)
           assert cp<=.74 and st=='TRACK'
