@@ -36,7 +36,6 @@ def enrich_role_depth(players: pd.DataFrame) -> pd.DataFrame:
     for _,idx in p.groupby('_team_key').groups.items():
         ix=list(idx)
         if not ix: continue
-        # Dense ranks only among players with observed opportunity.
         car=p.loc[ix,'_car']; tar=p.loc[ix,'_tar']; air=p.loc[ix,'_air']
         car_rank=car.rank(method='dense',ascending=False).astype(int)
         tar_rank=tar.rank(method='dense',ascending=False).astype(int)
@@ -63,11 +62,7 @@ def enrich_role_depth(players: pd.DataFrame) -> pd.DataFrame:
 
 
 def role_adjust_projection(proj:float, sd:float, player:dict, market:str):
-    """Market-specific role allocation correction.
-
-    We only make bounded changes. One game may move role expectations, but cannot
-    fully replace the matchup/efficiency model.
-    """
+    """Market-specific role allocation correction using observed opportunity only."""
     p=max(0.0,_f(proj)); s=max(.1,_f(sd,1)); notes=[]
     pos=str(player.get('position') or player.get('position_abbreviation') or '').upper()
     pass_att=_f(player.get('adv_pass_att')); car=_f(player.get('adv_rush_car')); tar=_f(player.get('adv_targets'))
@@ -78,8 +73,6 @@ def role_adjust_projection(proj:float, sd:float, player:dict, market:str):
 
     if market in {'Rushing Yards','Rush Attempts'}:
         if qb:
-            # A QB with observed designed/scramble work must not be projected from
-            # an RB-style team baseline. This is a conservative dual-threat floor.
             qshare=_clamp(_f(player.get('qb_rush_share')),0,.50)
             if car>=3 or qshare>=.05:
                 floor_y=car*max(_f(player.get('adv_ypc'),4.5),2.0)*.55
@@ -89,7 +82,7 @@ def role_adjust_projection(proj:float, sd:float, player:dict, market:str):
         else:
             if cr==1 and cshare>=.28:
                 p*=1.04; notes.append('lead-back share confirmed')
-            elif cr>=3 and cshare<.16:
+            elif (cr>=3 or (car<6 and cshare<.14)) and cshare<.16:
                 p*=.88; s*=1.08; notes.append('depth/committee carry tax')
             elif cr==0:
                 s*=1.12; notes.append('carry hierarchy unverified')
@@ -98,23 +91,17 @@ def role_adjust_projection(proj:float, sd:float, player:dict, market:str):
             p*=1.05; notes.append('target leader role confirmed')
         elif tr in (2,3) and tshare>=.10:
             p*=1.01; notes.append('primary target rotation confirmed')
-        elif tr>=4 and tshare<.10:
+        elif (tr>=4 or (tar<4 and tshare<.08)) and tshare<.10:
             p*=.88; s*=1.10; notes.append('depth target-share tax')
         elif tr==0:
             s*=1.14; notes.append('target hierarchy unverified')
-    # Early-season role uncertainty widens variance instead of manufacturing mean.
     if role_conf<.45 and market in {'Rushing Yards','Rush Attempts','Receiving Yards','Receptions'}:
         s*=1.10
     return float(max(0,p)),float(s),notes
 
 
 def qb_upset_margin_delta(home_ctx:dict, away_ctx:dict) -> tuple[float,list[str]]:
-    """Return a bounded home-margin adjustment for explosive QB/pass-game ceiling.
-
-    A talented favorite can still lose when the opponent owns a major passing
-    efficiency/explosive mismatch. This is deliberately capped so it cannot replace
-    the core power model or simply chase one result.
-    """
+    """Bounded home-margin adjustment for explosive QB/pass-game ceiling."""
     def attack(off, deff):
         ypa=_f(off.get('team_ypa_adv')) or (_f(off.get('team_pass_yds_pg'))/max(_f(off.get('team_pass_att_pg')),1))
         score=_f(off.get('score_drive_rate'),.34)
@@ -123,7 +110,6 @@ def qb_upset_margin_delta(home_ctx:dict, away_ctx:dict) -> tuple[float,list[str]
         adot=_f(off.get('team_adot'))
         opp_pass=_f(deff.get('def_passing'))
         opp_expl=_f(deff.get('def_expl'))
-        # Positive = more dangerous passing/upset ceiling.
         return (ypa-7.0)*.85 + (score-.34)*7.0 + epa*1.4 + (adot-8.0)*.08 - sack*4.0 + (-opp_pass)*.14 + (-opp_expl)*.06
     hs=attack(home_ctx,away_ctx); as_=attack(away_ctx,home_ctx)
     delta=_clamp((hs-as_)*.70,-4.25,4.25)
