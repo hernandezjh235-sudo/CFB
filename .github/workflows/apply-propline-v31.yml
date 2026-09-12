@@ -1,0 +1,43 @@
+name: Apply CFB PropLine v3.1
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-propline-v31.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.1
+        run: python scripts/apply_propline_v31.py
+      - name: Syntax check
+        run: python -m py_compile app.py propline_cfb_v31.py
+      - name: Static provider smoke
+        run: |
+          python - <<'PY'
+          from propline_cfb_v31 import MARKET_TO_LABEL,merge_line_feeds
+          assert MARKET_TO_LABEL['player_pass_yds']=='Passing Yards'
+          assert MARKET_TO_LABEL['player_rush_yds']=='Rushing Yards'
+          assert MARKET_TO_LABEL['player_reception_yds']=='Receiving Yards'
+          a=[{'player':'QB One','prop':'Passing Yards','line':250.5,'away':'A','home':'B','source':'Underdog'}]
+          b=[{'player':'QB One','prop':'Passing Yards','line':250.5,'away':'A','home':'B','source':'PropLine'},
+             {'player':'RB One','prop':'Rushing Yards','line':55.5,'away':'A','home':'B','source':'PropLine'}]
+          m=merge_line_feeds(a,b)
+          assert len(m)==2
+          assert m[0]['source']=='Underdog'
+          print('PropLine static smoke OK',len(MARKET_TO_LABEL),'markets')
+          PY
+      - name: Commit v3.1
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py .env.example propline_cfb_v31.py
+          git commit -m 'Apply CFB v3.1 PropLine fallback provider [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
