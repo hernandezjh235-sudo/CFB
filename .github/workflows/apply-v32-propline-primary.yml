@@ -1,0 +1,41 @@
+name: Apply CFB v3.2 PropLine Primary
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-v32-propline-primary.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.2
+        run: python scripts/apply_v32_propline_primary.py
+      - name: Syntax check
+        run: python -m py_compile app.py propline_cfb_v31.py underdog_cfb_v15.py
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Static source-order smoke
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('app.py').read_text()
+          assert 'CFB Prop Engine v3.2 — PROPLINE PRIMARY + UNDERDOG CIRCUIT BREAKER' in s
+          assert '["Auto Lines","PropLine Live","Underdog Live"]' in s
+          assert 'PropLine is primary while Underdog returns HTTP 426' in s
+          assert 'if not pl_rows:' in s
+          print('v3.2 source-order smoke OK')
+          PY
+      - name: Commit v3.2
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py
+          git commit -m 'Apply CFB v3.2 PropLine primary and Underdog circuit breaker [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
