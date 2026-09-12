@@ -20,8 +20,9 @@ from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player
 from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
 from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_grade_summary, segment_grade_summary, miss_audit
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
+from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.0 — ROLE DEPTH + QB RUSH + UPSET PATH"
+APP_VERSION = "CFB Prop Engine v3.1 — ROLE DEPTH + QB UPSET + PROPLINE FALLBACK"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -661,6 +662,7 @@ def_week=max(1,min(16,int((now.timetuple().tm_yday-239)/7)+1))
 year=st.sidebar.number_input("Season",2020,2030,now.year,1)
 week=st.sidebar.number_input("Week",1,20,def_week,1)
 cfbd=CFBD(secret("CFBD_API_KEY")); odds=OddsAPI(secret("ODDS_API_KEY"))
+propline_key=secret("PROPLINE_API_KEY")
 
 st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + LIVE Underdog CFB lines</span></div>""",unsafe_allow_html=True)
 
@@ -668,7 +670,8 @@ with st.sidebar:
     st.header("CFB Controls")
     st.write("Free CFB data", "✅ SportsDataverse + NCAA")
     st.write("CFBD paid API", "✅ optional" if cfbd.ready else "⚪ not needed")
-    st.write("Player lines", "✅ Underdog Live (free)" if not odds.ready else "✅ Underdog Live + optional Odds API")
+    st.write("Player lines", "✅ Auto: Underdog → PropLine" if propline_key else ("✅ Underdog Live (free)" if not odds.ready else "✅ Underdog Live + optional Odds API"))
+    st.write("PropLine", "✅ connected fallback" if propline_key else "⚪ add PROPLINE_API_KEY")
     force=st.button("🔄 Refresh CFB Data",width="stretch",type="primary")
     st.caption("No paid key is required. SportsDataverse supplies schedules/player/team/advanced/FPI data; NCAA supplies ranking fallback. Paid APIs remain optional only.")
 
@@ -695,6 +698,19 @@ with st.spinner("Loading FREE CFB data…"):
     if isinstance(bundle,dict):
         bundle.setdefault("free_health",{}).update({f"v25_{k}":v for k,v in opportunity_health.items()})
         bundle.setdefault("free_health",{}).update({f"v26_{k}":v for k,v in blowout_health.items()})
+# v3.1 PropLine game-line backup. One cached bulk request fills missing spread/total
+# context without replacing the existing free betting source.
+if propline_key:
+    try:
+        pl_game_map,pl_game_debug=fetch_propline_game_markets(propline_key)
+        for k,rec in pl_game_map.items():
+            cur=market_map.setdefault(k,{})
+            for fld in ("event_id","away","home","market_home_spread","market_total"):
+                if cur.get(fld) in (None,"") and rec.get(fld) not in (None,""):
+                    cur[fld]=rec.get(fld)
+        if isinstance(bundle,dict): bundle["propline_game_debug"]=pl_game_debug
+    except Exception as e:
+        if isinstance(bundle,dict): bundle["propline_game_debug"]={"status":"ERROR","error":str(e)}
 ctx=hydrate_team_branding(ctx)
 ctx=ensure_branding(ctx,bundle.get("games",[]),players)
 inject_nfl_cfb_css()
@@ -806,10 +822,10 @@ with TAB_PLAYERS:
     game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in display_games]
     selected_label=st.selectbox("Game / board",game_labels,index=0)
     selected_game=None if selected_label=="ALL LIVE CFB PROPS" else display_games[[f"{g['away']} @ {g['home']}" for g in display_games].index(selected_label)]
-    live_sources=["Underdog Live"] + (["Live Odds API"] if odds.ready else []) + ["Manual"]
+    live_sources=(["Auto Lines","Underdog Live","PropLine Live"] if propline_key else ["Underdog Live"]) + (["Live Odds API"] if odds.ready else []) + ["Manual"]
     source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
-    if source=="Underdog Live":
+    if source in {"Auto Lines","Underdog Live"}:
         c1,c2=st.columns([1,2])
         with c1:
             ud_refresh=st.button("🔄 Refresh Underdog CFB",type="primary",width="stretch")
@@ -820,6 +836,12 @@ with TAB_PLAYERS:
                 st.session_state["ud_cfb_debug"]=ud_debug
             ud_rows=st.session_state.get("ud_cfb_rows",[])
             ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
+            if source=="Auto Lines" and propline_key:
+                td=target_date.isoformat() if target_date else None
+                pl_rows,pl_debug=fetch_propline_cfb_props(propline_key,target_date=td)
+                st.session_state["propline_cfb_rows"]=pl_rows
+                st.session_state["propline_cfb_debug"]=pl_debug
+                ud_rows=merge_line_feeds(ud_rows,pl_rows)
             ctx=ensure_branding(ctx,week_games,players,ud_rows)
             prop_rows=list(ud_rows) if selected_game is None else props_for_game(ud_rows,selected_game["away"],selected_game["home"])
             # Some Underdog CFB rows carry a school abbreviation while the free
@@ -843,7 +865,7 @@ with TAB_PLAYERS:
                 st.markdown(f"<div class='cfb-live-strip'><b>LIVE BOARD CONNECTED</b> · {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}</div>",unsafe_allow_html=True)
             if prop_rows:
                 rawdf=pd.DataFrame(prop_rows)
-                rawcols=[c for c in ["player","team","matchup","prop","line","line_type","non_discounted_line","line_status","scheduled_at"] if c in rawdf.columns]
+                rawcols=[c for c in ["player","team","matchup","prop","line","source","books","line_type","non_discounted_line","line_status","scheduled_at"] if c in rawdf.columns]
                 with st.expander("📡 Live player lines",expanded=True):
                     st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
@@ -852,6 +874,29 @@ with TAB_PLAYERS:
                     st.json(st.session_state.get("ud_cfb_debug",[]))
         except Exception as e:
             st.error(f"Underdog CFB pull failed: {e}")
+    elif source=="PropLine Live":
+        try:
+            td=target_date.isoformat() if target_date else None
+            pl_rows,pl_debug=fetch_propline_cfb_props(propline_key,target_date=td)
+            st.session_state["propline_cfb_rows"]=pl_rows
+            st.session_state["propline_cfb_debug"]=pl_debug
+            ctx=ensure_branding(ctx,week_games,players,pl_rows)
+            prop_rows=list(pl_rows) if selected_game is None else props_for_game(pl_rows,selected_game["away"],selected_game["home"])
+            markets=sorted({str(r.get("prop")) for r in prop_rows if r.get("prop")})
+            if markets:
+                preferred=[x for x in ["Passing Yards","Receiving Yards","Rushing Yards","Passing TDs"] if x in markets]
+                chosen=st.multiselect("Prop market",markets,default=(preferred[:1] if preferred else markets[:1]),key="propline_markets")
+                prop_rows=[r for r in prop_rows if r.get("prop") in chosen]
+            st.markdown(f"<div class='cfb-live-strip'><b>PROPLINE CONNECTED</b> · {len(pl_rows)} standard CFB lines · quota remaining {pl_debug.get('quota',{}).get('X-Daily-Remaining','—')}</div>",unsafe_allow_html=True)
+            if prop_rows:
+                rawdf=pd.DataFrame(prop_rows)
+                rawcols=[c for c in ["player","team","matchup","prop","line","source","books","line_status","scheduled_at"] if c in rawdf.columns]
+                with st.expander("📡 PropLine player lines",expanded=True): st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
+            else:
+                st.info("PropLine has no matching standard player lines for this slate yet.")
+                with st.expander("PropLine diagnostics"): st.json(pl_debug)
+        except Exception as e:
+            st.error(f"PropLine CFB pull failed: {e}")
     elif selected_game and source=="Live Odds API":
         if not odds.ready: st.info("Add ODDS_API_KEY or switch to Underdog Live/Manual.")
         else:
