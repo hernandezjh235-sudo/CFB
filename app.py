@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.1 — ROLE DEPTH + QB UPSET + PROPLINE FALLBACK"
+APP_VERSION = "CFB Prop Engine v3.2 — PROPLINE PRIMARY + UNDERDOG CIRCUIT BREAKER"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -771,9 +771,16 @@ if slate_scope in {"Today","Tomorrow"}:
 # has tomorrow's CFB board open, build the event slate from those live event records.
 if slate_scope in {"Today","Tomorrow"} and not display_games:
     try:
-        boot_rows,boot_debug=fetch_underdog_cfb_props(force=force)
-        st.session_state["ud_cfb_rows"]=boot_rows
-        st.session_state["ud_cfb_debug"]=boot_debug
+        boot_rows=[]; boot_debug={}
+        if propline_key:
+            td=target_date.isoformat() if target_date else None
+            boot_rows,boot_debug=fetch_propline_cfb_props(propline_key,target_date=td)
+            st.session_state["propline_cfb_rows"]=boot_rows
+            st.session_state["propline_cfb_debug"]=boot_debug
+        if not boot_rows:
+            boot_rows,boot_debug=fetch_underdog_cfb_props(force=force)
+            st.session_state["ud_cfb_rows"]=boot_rows
+            st.session_state["ud_cfb_debug"]=boot_debug
         scoped_boot=filter_props_by_scope(boot_rows,slate_scope,pt_now)
         raw_prop_games=games_from_props(scoped_boot,ctx)
         for rg in raw_prop_games:
@@ -822,31 +829,40 @@ with TAB_PLAYERS:
     game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in display_games]
     selected_label=st.selectbox("Game / board",game_labels,index=0)
     selected_game=None if selected_label=="ALL LIVE CFB PROPS" else display_games[[f"{g['away']} @ {g['home']}" for g in display_games].index(selected_label)]
-    live_sources=(["Auto Lines","Underdog Live","PropLine Live"] if propline_key else ["Underdog Live"]) + (["Live Odds API"] if odds.ready else []) + ["Manual"]
+    live_sources=(["Auto Lines","PropLine Live","Underdog Live"] if propline_key else ["Underdog Live"]) + (["Live Odds API"] if odds.ready else []) + ["Manual"]
     source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
     if source in {"Auto Lines","Underdog Live"}:
         c1,c2=st.columns([1,2])
         with c1:
-            ud_refresh=st.button("🔄 Refresh Underdog CFB",type="primary",width="stretch")
+            refresh=st.button("🔄 Refresh Live CFB Lines",type="primary",width="stretch")
         try:
-            if ud_refresh or "ud_cfb_rows" not in st.session_state:
-                ud_rows,ud_debug=fetch_underdog_cfb_props(force=ud_refresh)
-                st.session_state["ud_cfb_rows"]=ud_rows
-                st.session_state["ud_cfb_debug"]=ud_debug
-            ud_rows=st.session_state.get("ud_cfb_rows",[])
-            ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
+            ud_rows=[]; ud_debug=[]; pl_rows=[]; pl_debug={}
             if source=="Auto Lines" and propline_key:
                 td=target_date.isoformat() if target_date else None
                 pl_rows,pl_debug=fetch_propline_cfb_props(propline_key,target_date=td)
                 st.session_state["propline_cfb_rows"]=pl_rows
                 st.session_state["propline_cfb_debug"]=pl_debug
-                ud_rows=merge_line_feeds(ud_rows,pl_rows)
+                # PropLine is primary while Underdog returns HTTP 426 from server-side requests.
+                # Do not waste requests retrying every blocked Underdog endpoint when PropLine is healthy.
+                ud_rows=list(pl_rows)
+                provider_note=f"PropLine primary · {len(pl_rows)} rows"
+                if not pl_rows:
+                    raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
+                    st.session_state["ud_cfb_rows"]=raw_ud
+                    st.session_state["ud_cfb_debug"]=ud_debug
+                    ud_rows=raw_ud
+                    provider_note=f"PropLine empty → Underdog fallback · {len(raw_ud)} rows"
+            else:
+                raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
+                st.session_state["ud_cfb_rows"]=raw_ud
+                st.session_state["ud_cfb_debug"]=ud_debug
+                ud_rows=raw_ud
+                provider_note=f"Underdog direct · {len(raw_ud)} rows"
+
+            ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
             ctx=ensure_branding(ctx,week_games,players,ud_rows)
             prop_rows=list(ud_rows) if selected_game is None else props_for_game(ud_rows,selected_game["away"],selected_game["home"])
-            # Some Underdog CFB rows carry a school abbreviation while the free
-            # schedule uses the full school name. Player lookup below canonicalizes
-            # the team; do not discard those live lines just because the names differ.
             if not prop_rows and selected_game is not None:
                 game_players=set()
                 if players is not None and not players.empty and "team" in players.columns:
@@ -857,23 +873,28 @@ with TAB_PLAYERS:
                     prop_rows=[r for r in ud_rows if norm_name(r.get("player")) in game_players]
             markets=sorted({str(r.get("prop")) for r in prop_rows if r.get("prop")})
             if markets:
-                preferred=[x for x in ["Passing Yards","Receiving Yards","Rushing Yards","Rush + Rec TDs"] if x in markets]
+                preferred=[x for x in ["Passing Yards","Receiving Yards","Rushing Yards","Passing TDs","Rush + Rec TDs"] if x in markets]
                 chosen=st.multiselect("Prop market",markets,default=(preferred[:1] if preferred else markets[:1]))
                 prop_rows=[r for r in prop_rows if r.get("prop") in chosen]
             with c2:
                 scope="all live CFB props" if selected_game is None else "matching this game"
-                st.markdown(f"<div class='cfb-live-strip'><b>LIVE BOARD CONNECTED</b> · {len(ud_rows)} CFB lines pulled · {len(prop_rows)} {scope}</div>",unsafe_allow_html=True)
+                st.markdown(f"<div class='cfb-live-strip'><b>LIVE BOARD CONNECTED</b> · {provider_note} · {len(prop_rows)} {scope}</div>",unsafe_allow_html=True)
             if prop_rows:
                 rawdf=pd.DataFrame(prop_rows)
                 rawcols=[c for c in ["player","team","matchup","prop","line","source","books","line_type","non_discounted_line","line_status","scheduled_at"] if c in rawdf.columns]
                 with st.expander("📡 Live player lines",expanded=True):
                     st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
-                st.info("Underdog did not return a matching player line for this selected game yet. Refresh when the CFB board opens/updates.")
-                with st.expander("Underdog feed diagnostics"):
-                    st.json(st.session_state.get("ud_cfb_debug",[]))
+                if source=="Auto Lines" and propline_key:
+                    st.info("No standard PropLine CFB player lines matched this slate yet. Underdog fallback was attempted only if PropLine returned zero rows.")
+                    with st.expander("Live feed diagnostics"):
+                        st.json({"PropLine":pl_debug,"Underdog":ud_debug})
+                else:
+                    st.info("Underdog did not return a matching player line. HTTP 426 means its private web endpoint is currently rejecting server-side access; use Auto Lines/PropLine Live instead.")
+                    with st.expander("Underdog feed diagnostics"):
+                        st.json(st.session_state.get("ud_cfb_debug",[]))
         except Exception as e:
-            st.error(f"Underdog CFB pull failed: {e}")
+            st.error(f"Live CFB line pull failed: {e}")
     elif source=="PropLine Live":
         try:
             td=target_date.isoformat() if target_date else None
