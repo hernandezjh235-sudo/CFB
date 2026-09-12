@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 # PropLine currently documents the CFB key as football_ncaaf. Avoid /sports discovery
 # as a hard dependency because that endpoint can return provider-side 500s even when
@@ -16,8 +17,8 @@ p.write_text(s)
 # Underdog endpoints with 426 responses.
 p=Path('app.py')
 s=p.read_text()
-s=s.replace('APP_VERSION = "CFB Prop Engine v3.2 — ROLE DEPTH + QB UPSET + PROPLINE PRIMARY"',
-            'APP_VERSION = "CFB Prop Engine v3.3 — DIRECT PROPLINE NCAAF + CLEAN FAILOVER"')
+s=re.sub(r'APP_VERSION = "CFB Prop Engine v[^"]+"',
+         'APP_VERSION = "CFB Prop Engine v3.3 — DIRECT PROPLINE NCAAF + CLEAN FAILOVER"',s,count=1)
 old='''                if not pl_rows:\n                    raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)\n                    st.session_state["ud_cfb_rows"]=raw_ud\n                    st.session_state["ud_cfb_debug"]=ud_debug\n                    ud_rows=raw_ud\n                    provider_note=f"PropLine empty → Underdog fallback · {len(raw_ud)} rows"\n'''
 new='''                if not pl_rows and str(pl_debug.get("status") or "").upper()=="EMPTY":\n                    raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)\n                    st.session_state["ud_cfb_rows"]=raw_ud\n                    st.session_state["ud_cfb_debug"]=ud_debug\n                    ud_rows=raw_ud\n                    provider_note=f"PropLine empty → Underdog fallback · {len(raw_ud)} rows"\n                elif not pl_rows:\n                    ud_rows=[]\n                    provider_note=f"PropLine {pl_debug.get('status','ERROR')} · Underdog circuit breaker active"\n'''
 if old not in s:
