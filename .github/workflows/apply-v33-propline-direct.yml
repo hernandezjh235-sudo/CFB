@@ -26,7 +26,7 @@ jobs:
           a=Path('app.py').read_text()
           assert 'return "football_ncaaf"' in s
           assert 'Underdog circuit breaker active' in a
-          assert 'v3.3' in a
+          assert 'CFB Prop Engine v3.3' in a
           print('v3.3 static smoke OK')
           PY
       - name: Commit v3.3
@@ -37,3 +37,4 @@ jobs:
           git commit -m 'Apply CFB v3.3 direct PropLine NCAAF repair [skip ci]' || exit 0
           git pull --rebase origin main
           git push
+# rerun 2
