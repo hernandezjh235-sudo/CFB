@@ -1,0 +1,41 @@
+name: Apply CFB v3.4 PropLine Only
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-v34-propline-only.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.4
+        run: python scripts/apply_v34_propline_only.py
+      - name: Syntax check
+        run: python -m py_compile app.py propline_cfb_v31.py underdog_cfb_v15.py
+      - name: Static v3.4 smoke
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          a=Path('app.py').read_text()
+          u=Path('underdog_cfb_v15.py').read_text()
+          assert 'CFB Prop Engine v3.4' in a
+          assert 'Underdog Live' not in a
+          assert 'boot_rows,boot_debug=fetch_underdog_cfb_props' not in a
+          assert 'PropLine empty → Underdog fallback' not in a
+          assert "'status':'DISABLED'" in u
+          print('v3.4 PropLine-only smoke OK')
+          PY
+      - name: Commit v3.4
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py underdog_cfb_v15.py
+          git commit -m 'Apply CFB v3.4 PropLine-only live lines [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
