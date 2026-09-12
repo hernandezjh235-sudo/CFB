@@ -66,28 +66,9 @@ def _request(path: str, api_key: str, params: Optional[dict] = None, ttl: int = 
 
 
 def discover_cfb_sport(api_key: str) -> str:
-    data, _ = _request("/sports", api_key, ttl=3600)
-    rows = data if isinstance(data, list) else (data or {}).get("sports", [])
-    # Prefer exact NCAAF naming; fall back to college-football wording.
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        key = str(r.get("key") or r.get("sport_key") or r.get("id") or "")
-        name = str(r.get("title") or r.get("name") or r.get("description") or "")
-        text = (key + " " + name).lower()
-        if "ncaaf" in text:
-            return key
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        key = str(r.get("key") or r.get("sport_key") or r.get("id") or "")
-        name = str(r.get("title") or r.get("name") or r.get("description") or "")
-        text = (key + " " + name).lower()
-        if "college" in text and "football" in text:
-            return key
-    # PropLine docs use NCAAF terminology. This fallback is only used when the
-    # sports endpoint changes shape; a 404 will be surfaced in debug instead of guessed over.
-    return "americanfootball_ncaaf"
+    # Official PropLine NCAAF sport key. Do not make /sports a prerequisite.
+    # Their documented CFB endpoints use /sports/football_ncaaf/... directly.
+    return "football_ncaaf"
 
 
 def _event_date(commence_time: Any) -> str:

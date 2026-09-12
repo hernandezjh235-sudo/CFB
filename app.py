@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.2 — PROPLINE PRIMARY + UNDERDOG CIRCUIT BREAKER"
+APP_VERSION = "CFB Prop Engine v3.3 — DIRECT PROPLINE NCAAF + CLEAN FAILOVER"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -847,12 +847,15 @@ with TAB_PLAYERS:
                 # Do not waste requests retrying every blocked Underdog endpoint when PropLine is healthy.
                 ud_rows=list(pl_rows)
                 provider_note=f"PropLine primary · {len(pl_rows)} rows"
-                if not pl_rows:
+                if not pl_rows and str(pl_debug.get("status") or "").upper()=="EMPTY":
                     raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
                     st.session_state["ud_cfb_rows"]=raw_ud
                     st.session_state["ud_cfb_debug"]=ud_debug
                     ud_rows=raw_ud
                     provider_note=f"PropLine empty → Underdog fallback · {len(raw_ud)} rows"
+                elif not pl_rows:
+                    ud_rows=[]
+                    provider_note=f"PropLine {pl_debug.get('status','ERROR')} · Underdog circuit breaker active"
             else:
                 raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
                 st.session_state["ud_cfb_rows"]=raw_ud
@@ -886,7 +889,7 @@ with TAB_PLAYERS:
                     st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
                 if source=="Auto Lines" and propline_key:
-                    st.info("No standard PropLine CFB player lines matched this slate yet. Underdog fallback was attempted only if PropLine returned zero rows.")
+                    st.info("No standard PropLine CFB player lines matched this slate. If PropLine reports ERROR, Underdog is intentionally not retried because its server-side endpoint is currently blocked with HTTP 426.")
                     with st.expander("Live feed diagnostics"):
                         st.json({"PropLine":pl_debug,"Underdog":ud_debug})
                 else:
