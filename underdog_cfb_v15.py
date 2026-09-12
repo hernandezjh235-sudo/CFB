@@ -160,15 +160,13 @@ def _dedupe(rows):
     return list(d.values())
 
 def fetch_underdog_cfb_props(force=False)->Tuple[List[Dict[str,Any]],List[Dict[str,Any]]]:
-    headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1','Accept':'application/json,text/plain,*/*','Referer':'https://underdogfantasy.com/','Origin':'https://underdogfantasy.com','Cache-Control':'no-cache','Pragma':'no-cache'}
-    rows=[];debug=[];start=time.time()
-    for idx,url in enumerate(UNDERDOG_URLS):
-        try:
-            r=requests.get(url,headers=headers,timeout=(4,10)); ct=r.headers.get('content-type',''); r.raise_for_status(); j=r.json(); n=_native(j,url); ja=_jsonapi(j,url) if not n else []; rec=_recursive(j,url) if not n and not ja else []; parsed=n or ja or rec; rows.extend(parsed); debug.append({'url':url,'status':r.status_code,'content_type':ct,'native':len(n),'jsonapi':len(ja),'recursive':len(rec),'rows':len(parsed)})
-            if parsed and idx<5:break
-        except Exception as e:debug.append({'url':url,'status':'ERROR','rows':0,'error':str(e)[:220]})
-        if time.time()-start>28:break
-    rows=_dedupe(rows); print('UNDERDOG_CFB_DEBUG',debug,'rows',len(rows),flush=True); return rows,debug
+    return [], [{
+        'provider':'Underdog',
+        'status':'DISABLED',
+        'rows':0,
+        'error':'Server-side Underdog endpoint disabled after repeated HTTP 426 Upgrade Required responses.'
+    }]
+
 
 def props_for_game(rows,away,home):
     if not rows:return []

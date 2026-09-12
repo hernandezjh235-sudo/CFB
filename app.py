@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.3 — DIRECT PROPLINE NCAAF + CLEAN FAILOVER"
+APP_VERSION = "CFB Prop Engine v3.4 — PROPLINE ONLY LIVE LINES"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -777,10 +777,6 @@ if slate_scope in {"Today","Tomorrow"} and not display_games:
             boot_rows,boot_debug=fetch_propline_cfb_props(propline_key,target_date=td)
             st.session_state["propline_cfb_rows"]=boot_rows
             st.session_state["propline_cfb_debug"]=boot_debug
-        if not boot_rows:
-            boot_rows,boot_debug=fetch_underdog_cfb_props(force=force)
-            st.session_state["ud_cfb_rows"]=boot_rows
-            st.session_state["ud_cfb_debug"]=boot_debug
         scoped_boot=filter_props_by_scope(boot_rows,slate_scope,pt_now)
         raw_prop_games=games_from_props(scoped_boot,ctx)
         for rg in raw_prop_games:
@@ -829,10 +825,10 @@ with TAB_PLAYERS:
     game_labels=["ALL LIVE CFB PROPS"]+[f"{g['away']} @ {g['home']}" for g in display_games]
     selected_label=st.selectbox("Game / board",game_labels,index=0)
     selected_game=None if selected_label=="ALL LIVE CFB PROPS" else display_games[[f"{g['away']} @ {g['home']}" for g in display_games].index(selected_label)]
-    live_sources=(["Auto Lines","PropLine Live","Underdog Live"] if propline_key else ["Underdog Live"]) + (["Live Odds API"] if odds.ready else []) + ["Manual"]
+    live_sources=(["Auto Lines","PropLine Live"] if propline_key else []) + (["Live Odds API"] if odds.ready else []) + ["Manual"]
     source=st.radio("Prop lines",live_sources,horizontal=True)
     prop_rows=[]
-    if source in {"Auto Lines","Underdog Live"}:
+    if source=="Auto Lines":
         c1,c2=st.columns([1,2])
         with c1:
             refresh=st.button("🔄 Refresh Live CFB Lines",type="primary",width="stretch")
@@ -847,21 +843,9 @@ with TAB_PLAYERS:
                 # Do not waste requests retrying every blocked Underdog endpoint when PropLine is healthy.
                 ud_rows=list(pl_rows)
                 provider_note=f"PropLine primary · {len(pl_rows)} rows"
-                if not pl_rows and str(pl_debug.get("status") or "").upper()=="EMPTY":
-                    raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
-                    st.session_state["ud_cfb_rows"]=raw_ud
-                    st.session_state["ud_cfb_debug"]=ud_debug
-                    ud_rows=raw_ud
-                    provider_note=f"PropLine empty → Underdog fallback · {len(raw_ud)} rows"
-                elif not pl_rows:
+                if not pl_rows:
                     ud_rows=[]
-                    provider_note=f"PropLine {pl_debug.get('status','ERROR')} · Underdog circuit breaker active"
-            else:
-                raw_ud,ud_debug=fetch_underdog_cfb_props(force=refresh)
-                st.session_state["ud_cfb_rows"]=raw_ud
-                st.session_state["ud_cfb_debug"]=ud_debug
-                ud_rows=raw_ud
-                provider_note=f"Underdog direct · {len(raw_ud)} rows"
+                    provider_note=f"PropLine {pl_debug.get('status','EMPTY')} · Underdog disabled (HTTP 426)"
 
             ud_rows=filter_props_by_scope(ud_rows,slate_scope,pt_now)
             ctx=ensure_branding(ctx,week_games,players,ud_rows)
@@ -889,9 +873,9 @@ with TAB_PLAYERS:
                     st.dataframe(rawdf[rawcols].head(150),width="stretch",hide_index=True)
             if not prop_rows:
                 if source=="Auto Lines" and propline_key:
-                    st.info("No standard PropLine CFB player lines matched this slate. If PropLine reports ERROR, Underdog is intentionally not retried because its server-side endpoint is currently blocked with HTTP 426.")
+                    st.info("No standard PropLine CFB player lines matched this slate. Underdog is disabled because its server-side endpoint is currently blocked with HTTP 426.")
                     with st.expander("Live feed diagnostics"):
-                        st.json({"PropLine":pl_debug,"Underdog":ud_debug})
+                        st.json({"PropLine":pl_debug,"Underdog":"DISABLED — HTTP 426"})
                 else:
                     st.info("Underdog did not return a matching player line. HTTP 426 means its private web endpoint is currently rejecting server-side access; use Auto Lines/PropLine Live instead.")
                     with st.expander("Underdog feed diagnostics"):
