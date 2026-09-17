@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.5 — PROJECTION JOIN + LOGO REPAIR"
+APP_VERSION = "CFB Prop Engine v3.6 — ZERO-PROJECTION + LOGO FALLBACK"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -968,7 +968,29 @@ with TAB_PLAYERS:
             tc=get_team(ctx,team or ""); oc=get_team(ctx,opp or "")
             model_pr=dict(pr)
             if team: model_pr['current_team']=team
-            proj,sd,notes=player_projection(model_pr,r.get("prop"),tc,oc,row_game,team or "")
+            # v3.6: a live QB prop can arrive before the free player-season tables
+            # contain that player's current row. Build an independent TEAM-based QB
+            # opportunity prior instead of emitting a fake 0.0. The sportsbook line
+            # is never used to create this projection. Low-confidence calibration
+            # downstream still prevents this fallback from being treated like a full sample.
+            market_label=str(r.get("prop") or "")
+            if not model_pr and market_label in {"Passing Yards","Pass Attempts","Completions","Passing TDs","Pass + Rush Yards"}:
+                team_pts=sf(row_game.get('home_points') if team==row_game.get('home') else row_game.get('away_points'),24.0)
+                tpass=sf(tc.get('team_pass_yds_pg')); tatt=sf(tc.get('team_pass_att_pg')); tcomp=sf(tc.get('team_pass_comp_pg')); ttd=sf(tc.get('team_pass_td_pg'))
+                if tpass<=0: tpass=clamp(185.0 + 2.15*team_pts,195.0,285.0)
+                if tatt<=0: tatt=clamp(25.0 + .24*team_pts,27.0,38.0)
+                if tcomp<=0: tcomp=tatt*clamp(.61 + (team_pts-24.0)*.002,.56,.69)
+                if ttd<=0: ttd=clamp(.45 + team_pts/20.0,.8,2.4)
+                model_pr={
+                    'player':r.get('player'),'team':team,'current_team':team,'games':1,
+                    'pass_yds':tpass,'pass_att':tatt,'pass_comp':tcomp,'pass_td':ttd,
+                    'rush_yds':0.0,'rush_att':0.0,'sample_source':'team_role_fallback',
+                    'starter_current':True,'role_depth_conf':.42
+                }
+            proj,sd,notes=player_projection(model_pr,market_label,tc,oc,row_game,team or "")
+            if str(model_pr.get('sample_source') or '')=='team_role_fallback':
+                notes.insert(0,'team QB opportunity fallback — player sample pending')
+                sd=max(sd, max(24.0, proj*.18))
             avail,avail_notes=player_availability(r.get("player",""),team or "",injuries_df,depth_df)
             proj*=avail; sd=max(sd*.92, sd*math.sqrt(max(avail,.25))); notes.extend(avail_notes)
             weather=row_game.get("weather",{}) or {}; wind=sf(weather.get("wind_mph")); precip=sf(weather.get("precip_prob"))
