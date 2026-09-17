@@ -1,0 +1,33 @@
+name: Apply CFB v3.6 Zero Projection Logo Repair
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-v36-zero-projection-logo.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.6
+        run: python scripts/apply_v36_zero_projection_logo.py
+      - name: Syntax check
+        run: python -m py_compile app.py cfb_nfl_ui_v18.py propline_cfb_v31.py
+      - name: Verify repair markers
+        run: |
+          grep -q 'team QB opportunity fallback' app.py
+          grep -q 'away_logo' cfb_nfl_ui_v18.py
+          grep -q 'CFB Prop Engine v3.6' app.py
+      - name: Commit v3.6
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_nfl_ui_v18.py
+          git commit -m 'Apply CFB v3.6 zero-projection and logo fallback [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
