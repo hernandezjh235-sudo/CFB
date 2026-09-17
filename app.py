@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.4 — PROPLINE ONLY LIVE LINES"
+APP_VERSION = "CFB Prop Engine v3.5 — PROJECTION JOIN + LOGO REPAIR"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -664,13 +664,13 @@ week=st.sidebar.number_input("Week",1,20,def_week,1)
 cfbd=CFBD(secret("CFBD_API_KEY")); odds=OddsAPI(secret("ODDS_API_KEY"))
 propline_key=secret("PROPLINE_API_KEY")
 
-st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + LIVE Underdog CFB lines</span></div>""",unsafe_allow_html=True)
+st.markdown(f"""<div class='hero'><h1>🏈 CFB Prop Engine</h1><p>Opponent-adjusted college football projections · rankings ≠ matchup quality · blowout/playing-time engine · player opportunity · moneyline/spread/total · live market audit</p><span class='badge'>{APP_VERSION}</span><span class='badge'>FREE SportsDataverse + NCAA + PropLine live CFB lines</span></div>""",unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("CFB Controls")
     st.write("Free CFB data", "✅ SportsDataverse + NCAA")
     st.write("CFBD paid API", "✅ optional" if cfbd.ready else "⚪ not needed")
-    st.write("Player lines", "✅ Auto: Underdog → PropLine" if propline_key else ("✅ Underdog Live (free)" if not odds.ready else "✅ Underdog Live + optional Odds API"))
+    st.write("Player lines", "✅ PropLine Live" if propline_key else ("⚪ add PROPLINE_API_KEY" if not odds.ready else "✅ optional Odds API"))
     st.write("PropLine", "✅ connected fallback" if propline_key else "⚪ add PROPLINE_API_KEY")
     force=st.button("🔄 Refresh CFB Data",width="stretch",type="primary")
     st.caption("No paid key is required. SportsDataverse supplies schedules/player/team/advanced/FPI data; NCAA supplies ranking fallback. Paid APIs remain optional only.")
@@ -1084,7 +1084,7 @@ with TAB_DATA:
         st.warning("Some sources did not load. The rest of the app stays live and reports missing layers instead of inventing data.")
         st.json(bundle["errors"])
     st.markdown("**Current architecture**")
-    st.code("SportsDataverse/NCAA + current rosters + drives + game rosters + advanced QB/RB/WR + situational/red-zone + Open-Meteo + Underdog event lock → opportunity/hook/pressure/explosive engine → QB volume floor + role-quality calibration → data-integrity gate → Higher/Lower probability + edge → market-by-market grading + miss audit",language="text")
+    st.code("SportsDataverse/NCAA + current rosters + drives + game rosters + advanced QB/RB/WR + situational/red-zone + Open-Meteo + PropLine event lock → opportunity/hook/pressure/explosive engine → QB volume floor + role-quality calibration → data-integrity gate → Higher/Lower probability + edge → market-by-market grading + miss audit",language="text")
     st.caption("Injuries/depth charts are intentionally a separate adapter layer. CFB availability reporting is inconsistent, so the app does not pretend missing injury data means healthy.")
 
 with TAB_GRADE:

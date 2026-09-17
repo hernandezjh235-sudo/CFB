@@ -70,7 +70,15 @@ def _team(ctx,name):
     n=_norm(name)
     for k,v in (ctx or {}).items():
         if _norm(k)==n:return v
-    return {}
+    # Runtime fallback: PropLine/ESPN can use a display-name variant that is not
+    # present in the model context key. Resolve branding directly instead of
+    # rendering a blank logo. This changes presentation only, never projections.
+    brands=espn_team_branding()
+    info=brands.get(n)
+    if not info and n:
+        hits=[v for k,v in brands.items() if len(k)>=4 and (k in n or n in k)]
+        info=hits[0] if len(hits)==1 else None
+    return info or {}
 
 def _logo(ctx,name): return str(_team(ctx,name).get('logo') or '')
 def _color(ctx,name): return str(_team(ctx,name).get('color') or '#2f81f7')
