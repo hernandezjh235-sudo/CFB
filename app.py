@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.9 — TRUE WEEK + PLAYER DATA LOCK"
+APP_VERSION = "CFB Prop Engine v4.0 — LIVE EVENT AUTHORITATIVE"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -814,7 +814,7 @@ if slate_scope in {"Today","Tomorrow"} and not display_games:
             st.session_state["propline_cfb_rows"]=boot_rows
             st.session_state["propline_cfb_debug"]=boot_debug
         scoped_boot=filter_props_by_scope(boot_rows,slate_scope,pt_now)
-        raw_prop_games=games_from_props(scoped_boot,ctx)
+        raw_prop_games=reconcile_prop_games(scoped_boot,ctx)
         for rg in raw_prop_games:
             away=rg.get("away_team");home=rg.get("home_team")
             if not away or not home:continue
@@ -822,8 +822,11 @@ if slate_scope in {"Today","Tomorrow"} and not display_games:
             manual_gc=game_weather_context(away,home,game_context_df)
             pg=project_game(away,home,ctx,market,neutral=bool(manual_gc.get("neutral",False)))
             pg["weather"]={"wind_mph":sf(manual_gc.get("wind_mph")),"precip_prob":sf(manual_gc.get("precip_prob")),"temp_f":sf(manual_gc.get("temp_f"),70)}
-            pg["game_id"]=rg.get("id");pg["start_date"]=rg.get("start_date")
-            for k in ["away_abbreviation","home_abbreviation","away_espn_id","home_espn_id","away_logo","home_logo"]:pg[k]=rg.get(k) or ""
+            pg["game_id"]=rg.get("game_id") or rg.get("id");pg["start_date"]=rg.get("start_date")
+            for k in ["away_abbreviation","home_abbreviation","away_espn_id","home_espn_id","away_logo","home_logo"]:
+                pg[k]=rg.get(k) or ""
+            # ESPN reconciled event wins for identity and branding.
+            pg["event_source"]=rg.get("source") or "PropLine"
             week_games.append(pg)
         week_games=annotate_games(week_games)
         display_games=filter_games_by_scope(week_games,slate_scope,pt_now)
@@ -972,12 +975,15 @@ with TAB_PLAYERS:
                 # an Ohio State production sample into an Ohio State game card.
                 ra,rh=norm_name(r.get("away")),norm_name(r.get("home"))
                 if ra and rh:
+                    rid=str(r.get("event_id") or r.get("game_id") or "")
                     for gg in week_games:
+                        gid=str(gg.get("prop_event_id") or gg.get("game_id") or gg.get("id") or "")
                         ga=norm_name(gg.get("away_abbreviation")); gh=norm_name(gg.get("home_abbreviation"))
                         full_match=((norm_name(gg["away"])==ra and norm_name(gg["home"])==rh) or
                                     (ra in norm_name(gg["away"]) and rh in norm_name(gg["home"])))
                         abbr_match=(ga==ra and gh==rh)
-                        if full_match or abbr_match:
+                        event_match=bool(rid and gid and rid==gid)
+                        if event_match or full_match or abbr_match:
                             row_game=gg; break
                 # Only use historical player-team matching when the live feed truly
                 # lacks an event matchup. It is a last-resort fallback, not authority.
@@ -1054,6 +1060,11 @@ with TAB_PLAYERS:
             notes.extend(qprob_notes)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status=status_from_quality(p,proj,quality_tier,r.get("prop"),model_pr)
+            if not model_pr or proj<=0:
+                p=.50
+                quality_tier="UNRESOLVED"
+                status="NO PLAY"
+                notes.append("player production join unresolved — projection withheld")
             integrity_tier,integrity_score,integrity_flags=integrity_audit(r,model_pr,team,opp,row_game,tc,r.get("prop"))
             status=enforce_integrity_status(status,p,quality_tier,integrity_tier,integrity_flags)
             if integrity_flags:
