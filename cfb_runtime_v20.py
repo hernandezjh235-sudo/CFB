@@ -188,6 +188,28 @@ def games_from_props(rows:List[dict],ctx:Dict[str,dict])->List[dict]:
     return list(out.values())
 
 
+
+def reconcile_prop_games(rows:List[dict],ctx:Dict[str,dict])->List[dict]:
+    raw=games_from_props(rows,ctx)
+    out=[]
+    for g in raw:
+        dt=local_game_dt(g)
+        espn=espn_games_for_date(dt.strftime('%Y%m%d')) if dt else []
+        ga=_norm(g.get('away_team')); gh=_norm(g.get('home_team'))
+        best=None
+        for e in espn:
+            ea=_norm(e.get('away_team')); eh=_norm(e.get('home_team'))
+            aa=_norm(e.get('away_abbreviation')); ha=_norm(e.get('home_abbreviation'))
+            am=(ga==ea or ga==aa or (len(ga)>=5 and (ga in ea or ea in ga)))
+            hm=(gh==eh or gh==ha or (len(gh)>=5 and (gh in eh or eh in gh)))
+            if am and hm:
+                best=e; break
+        if best:
+            q=dict(g); q.update(best); q['prop_event_id']=g.get('id'); q['source']='PropLine + ESPN reconciled'; out.append(q)
+        else:
+            out.append(g)
+    return out
+
 def _branding_from_games(games:Iterable[dict])->Dict[str,dict]:
     out={}
     for g in games or []:

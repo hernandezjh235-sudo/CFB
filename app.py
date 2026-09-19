@@ -14,7 +14,7 @@ from free_data_v16 import load_free_stack
 from underdog_cfb_v15 import fetch_underdog_cfb_props, props_for_game
 from cfb_nfl_ui_v18 import hydrate_team_branding, inject_nfl_cfb_css, render_moneyline_nfl, render_player_nfl, render_fast_rows
 from cfb_runtime_v20 import (annotate_games, ensure_branding, filter_games_by_scope, filter_props_by_scope,
-    local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props)
+    local_now, scope_target_date, logo_coverage, day_games, canonical_prop_team, prop_rows_date_label, games_from_props, reconcile_prop_games)
 from cfb_opportunity_v25 import enrich_opportunity, automatic_weather
 from cfb_blowout_v26 import enrich_blowout_context, game_blowout_profile, player_blowout_modifier
 from cfb_quality_v27 import stabilize_projection, calibrate_probability, status_from_quality
@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.7 — SEASON ANCHOR + LOGO RESTORE"
+APP_VERSION = "CFB Prop Engine v3.8 — EVENT LOCK + PROJECTION VERIFY"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -1068,7 +1068,7 @@ with TAB_PLAYERS:
             if has_adv: notes.append('2026 advanced usage available')
             notes.append(f'projection quality {quality_tier.lower()}')
             _bm,_bsd,_bn,starter_retention=player_blowout_modifier(model_pr,r.get("prop"),row_game,team or "",tc)
-            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes)),
+            q={**r,"_game":row_game,"team":team,"opp":opp,"side":side,"projection_source":str(model_pr.get("sample_source") or "unknown").upper(),"sample_games":int(sf(model_pr.get("games"),0)),"projection":proj,"sd":sd,"probability":p,"edge":edge,"status":status,"notes":" · ".join(dict.fromkeys(notes)),
                "blowout_level":row_game.get("blowout_level","LOW"),"blowout_prob":row_game.get("blowout_prob",0),"starter_retention":starter_retention,"backup_opportunity":row_game.get("backup_opportunity",0),
                "quality_tier":quality_tier,"probability_cap":pcap,"live_game_locked":bool(r.get("away") and r.get("home")),
                "integrity_tier":integrity_tier,"integrity_score":integrity_score,"integrity_flags":" | ".join(integrity_flags)}
