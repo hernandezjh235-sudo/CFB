@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.6 — ZERO-PROJECTION + LOGO FALLBACK"
+APP_VERSION = "CFB Prop Engine v3.7 — SEASON ANCHOR + LOGO RESTORE"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -356,13 +356,23 @@ def parse_player_stats(rows:list, games_played:dict)->pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def _player_match_key(name:str)->str:
+    # Sportsbooks frequently add/remove suffixes (Jr., Sr., II/III/IV/V).
+    # Strip suffixes for JOINING only; preserve the displayed player name.
+    x=re.sub(r"\([^)]*\)"," ",str(name or ""))
+    x=re.sub(r"\b(jr|sr|ii|iii|iv|v)\.?\b"," ",x,flags=re.I)
+    return norm_name(x)
+
 def lookup_player(df:pd.DataFrame,name:str)->dict:
     if df is None or df.empty:return {}
     n=norm_name(name)
     exact=df[df["player"].astype(str).map(norm_name)==n]
     if len(exact): return exact.iloc[0].to_dict()
-    # Conservative fuzzy fallback: only prefix+surname-like normalized containment.
-    hits=df[df["player"].astype(str).map(lambda x:n in norm_name(x) or norm_name(x) in n)]
+    mk=_player_match_key(name)
+    canon=df[df["player"].astype(str).map(_player_match_key)==mk]
+    if len(canon)==1:return canon.iloc[0].to_dict()
+    # Conservative fuzzy fallback after canonical suffix cleanup.
+    hits=df[df["player"].astype(str).map(lambda x: mk in _player_match_key(x) or _player_match_key(x) in mk)]
     return hits.iloc[0].to_dict() if len(hits)==1 else {}
 
 
@@ -512,6 +522,32 @@ def player_projection(player:dict, market_label:str, team_ctx:dict, opp_ctx:dict
     # backup rushing opportunity, and underdog catch-up passing/targets.
     blow_mult,blow_sd,blow_notes,_ret=player_blowout_modifier(player,market_label,game,team_name,team_ctx)
     proj*=blow_mult; sd*=blow_sd; notes.extend(blow_notes)
+
+    # v3.7 CURRENT-SEASON ANCHOR.
+    # A healthy current QB with real 2026 production must not collapse to half of
+    # his observed passing baseline because several matchup/hook multipliers stack.
+    # This is deliberately independent of the sportsbook prop line.
+    if market_label=="Passing Yards" and sample_source=="current" and gp>=1 and pass_y>0:
+        level=str(game.get("blowout_level") or "LOW").upper()
+        # Keep opponent adjustment meaningful but prevent tiny early-season EPA
+        # samples from cutting an established QB baseline by 20%+ on their own.
+        matchup_anchor=pass_y*clamp(pass_match,.90,1.12)*clamp(pass_script,.94,1.08)*clamp(pace_adj,.96,1.05)
+        retention={"LOW":.88,"MODERATE":.82,"HIGH":.75,"EXTREME":.68}.get(level,.84)
+        # Market spread is validation only: a competitive external spread prevents
+        # an internally noisy blowout estimate from applying a severe QB hook.
+        mspread=game.get("market_home_spread")
+        if mspread not in (None,""):
+            am=abs(sf(mspread))
+            if am<=6.5: retention=max(retention,.90)
+            elif am<=10.0: retention=max(retention,.84)
+        floor=matchup_anchor*retention
+        ceiling=pass_y*1.24
+        if proj<floor:
+            proj=floor
+            notes.append("current-season QB volume floor")
+        proj=min(proj,ceiling)
+        sd=max(sd, max(30.0,proj*.18))
+
     if proj<=0: notes.append("insufficient player sample")
     return float(max(0,proj)),float(sd),notes
 
@@ -1010,6 +1046,11 @@ with TAB_PLAYERS:
             notes.extend(qproj_notes)
             raw_p=prop_probability(proj,r.get("line"),sd,side)
             p,pcap,qprob_notes,quality_tier=calibrate_probability(raw_p,model_pr,r.get("prop"),tc,row_game,proj,r.get("line"))
+            if str(model_pr.get("sample_source") or "")=="team_role_fallback":
+                p=clamp(p,.36,.64)
+                pcap=min(sf(pcap,1.0),.64)
+                quality_tier="LOW"
+                qprob_notes.append("team-role fallback confidence capped at 64%")
             notes.extend(qprob_notes)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status=status_from_quality(p,proj,quality_tier,r.get("prop"),model_pr)
