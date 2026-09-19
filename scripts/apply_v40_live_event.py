@@ -69,3 +69,5 @@ s=s.replace(needle,repl)
 p.write_text(s)
 compile(s,"app.py","exec")
 print("v4.0 live-event authoritative patch ready")
+
+# trigger
