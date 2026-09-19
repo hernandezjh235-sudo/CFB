@@ -53,3 +53,5 @@ p.write_text(s)
 for f in ["cfb_runtime_v20.py","app.py","cfb_nfl_ui_v18.py"]:
     compile(Path(f).read_text(),f,"exec")
 print("v3.8 ready")
+
+# trigger workflow
