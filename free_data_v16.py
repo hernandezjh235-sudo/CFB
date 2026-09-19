@@ -140,8 +140,12 @@ def load_free_stack(year:int, week:int):
     available=[]
     if wc and not schedule.empty:
         available=sorted(pd.to_numeric(schedule[wc],errors='coerce').dropna().astype(int).unique().tolist())
+        # IMPORTANT: never silently roll a requested future/current week backward.
+        # A lagging cfbfastR release can be one week behind the actual live slate.
+        # Keep resolved_week equal to the requested week and use ESPN/live events
+        # for schedule identity while current player tables remain season-to-date.
         if available and resolved_week not in available:
-            resolved_week=max(available)
+            health['schedule_week_missing']=resolved_week
 
     games=base._schedule_rows(schedule,resolved_week)
     if not games:

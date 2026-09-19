@@ -22,7 +22,7 @@ from cfb_integrity_v28 import integrity_audit, enforce_integrity_status, market_
 from cfb_role_v30 import enrich_role_depth, role_adjust_projection, qb_upset_margin_delta
 from propline_cfb_v31 import fetch_propline_cfb_props, fetch_propline_game_markets, merge_line_feeds
 
-APP_VERSION = "CFB Prop Engine v3.8 — EVENT LOCK + PROJECTION VERIFY"
+APP_VERSION = "CFB Prop Engine v3.9 — TRUE WEEK + PLAYER DATA LOCK"
 BASE = Path(__file__).resolve().parent
 DATA_DIR = BASE / "data"
 CACHE_DIR = BASE / "cache"
@@ -1047,10 +1047,10 @@ with TAB_PLAYERS:
             raw_p=prop_probability(proj,r.get("line"),sd,side)
             p,pcap,qprob_notes,quality_tier=calibrate_probability(raw_p,model_pr,r.get("prop"),tc,row_game,proj,r.get("line"))
             if str(model_pr.get("sample_source") or "")=="team_role_fallback":
-                p=clamp(p,.36,.64)
-                pcap=min(sf(pcap,1.0),.64)
+                p=clamp(p,.40,.60)
+                pcap=min(sf(pcap,1.0),.60)
                 quality_tier="LOW"
-                qprob_notes.append("team-role fallback confidence capped at 64%")
+                qprob_notes.append("team-role fallback confidence capped at 60%")
             notes.extend(qprob_notes)
             edge=proj-sf(r.get("line")); edge = edge if side=="Over" else -edge
             status=status_from_quality(p,proj,quality_tier,r.get("prop"),model_pr)
@@ -1074,7 +1074,7 @@ with TAB_PLAYERS:
                "integrity_tier":integrity_tier,"integrity_score":integrity_score,"integrity_flags":" | ".join(integrity_flags)}
             projected.append(q)
         pdf=pd.DataFrame(projected)
-        show=["player","team","prop","side","line","projection","edge","probability","status","quality_tier","integrity_tier","integrity_flags","notes"]
+        show=["player","team","prop","side","line","projection","projection_source","sample_games","edge","probability","status","quality_tier","integrity_tier","integrity_flags","notes"]
         if not pdf.empty:
             ranked=sorted(projected,key=lambda x:sf(x.get("probability")),reverse=True)
             good_ranked=[x for x in ranked if sf(x.get("projection"))>0]
