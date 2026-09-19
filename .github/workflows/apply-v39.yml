@@ -1,0 +1,26 @@
+name: Apply CFB v3.9 True Week
+on:
+  push:
+    paths:
+      - scripts/apply_v39_true_week.py
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python scripts/apply_v39_true_week.py
+      - run: |
+          grep -q "CFB Prop Engine v3.9" app.py
+          grep -q "schedule_week_missing" free_data_v16.py
+          grep -q "projection_source" app.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.py free_data_v16.py
+          git diff --cached --quiet || git commit -m "Apply CFB v3.9 true-week player data lock [skip ci]"
+          git push
