@@ -1,0 +1,34 @@
+name: Apply CFB v3.7 Season Anchor Logo Restore
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-v37-season-anchor-logo.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Apply v3.7
+        run: python scripts/apply_v37_season_anchor_logo.py
+      - name: Syntax check
+        run: python -m py_compile app.py cfb_nfl_ui_v18.py
+      - name: Verify repair markers
+        run: |
+          grep -q 'current-season QB volume floor' app.py
+          grep -q 'team-role fallback confidence capped at 64%' app.py
+          grep -q "groups':'80" cfb_nfl_ui_v18.py
+          grep -q 'CFB Prop Engine v3.7' app.py
+      - name: Commit v3.7
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app.py cfb_nfl_ui_v18.py
+          git commit -m 'Apply CFB v3.7 season anchor and logo restore [skip ci]' || exit 0
+          git pull --rebase origin main
+          git push
